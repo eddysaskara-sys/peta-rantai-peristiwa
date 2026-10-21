@@ -441,12 +441,90 @@ async function renderRantai() {
         <div style="margin-top:10px"><button type="button" class="btn ghost small-btn" id="focus-detail">Sumber dan detail</button></div>
       </div></div>
       ${d.down.length ? d.down.map((lvlArr, i) => `<p class="stage-label">${i === 0 ? 'Dampak langsung' : `Dampak ${i + 1} langkah berikutnya`}</p>${lvlArr.map(stop).join('')}`).join('') : '<p class="stage-label">Belum ada dampak yang tercatat</p>'}
-    </div>`;
+    </div>
+    ${chainForecastHtml(f, d)}`;
+  bindChainForecast(f, d);
   $('#chain-back').addEventListener('click', () => { state.chainId = null; go('rantai'); });
   $('#focus-detail').addEventListener('click', () => openEvent(f.id));
   const wu = $('#with-usulan');
   if (wu) wu.addEventListener('change', () => { state.withUsulan = wu.checked; go('rantai'); });
   view.querySelectorAll('[data-chain]').forEach((b) => b.addEventListener('click', () => go('rantai', { chainId: Number(b.dataset.chain), focus: true })));
+}
+
+// ---------- Perkiraan dari rantai ----------
+// Peristiwa yang dipakai sebagai titik berangkat perkiraan: fokus dan semua dampaknya.
+function chainNodes(f, d) {
+  const seen = new Set([f.id]);
+  const list = [f];
+  d.down.flat().forEach((n) => {
+    if (n.event && !seen.has(n.event.id)) {
+      seen.add(n.event.id);
+      list.push(n.event);
+    }
+  });
+  return list;
+}
+
+function chainForecastHtml(f, d) {
+  const nodes = chainNodes(f, d);
+  const hyps = nodes.flatMap((ev) => (ev.dampak || []).map((h) => ({ ev, h })));
+  const options = nodes.map((ev) => `<option value="${ev.id}">${esc(ev.judul)}</option>`).join('');
+  return `
+    <section class="section" id="chain-forecast">
+      <div class="section-head"><h2>Perkiraan dari rantai ini</h2></div>
+      <p class="lead">Lanjutkan rantainya: apa dampak berikutnya yang Anda perkirakan? Catat sekarang, lalu tandai terjadi atau tidak di tab Perkiraan saat tanggal ceknya tiba.</p>
+      ${hyps.length
+        ? hyps.map((x, i) => `<div class="hyp">
+            <p>${esc(x.h.teks)}</p>
+            <p class="muted small">Hipotesis AI dari: ${esc(x.ev.judul)}, perkiraan dalam ±${x.h.hari} hari</p>
+            ${state.owner ? `<button type="button" class="btn ghost small-btn" data-chyp="${i}" style="margin-top:6px">Catat sebagai perkiraan</button>` : ''}
+          </div>`).join('')
+        : '<p class="muted">AI belum memberi hipotesis dampak untuk peristiwa di rantai ini.</p>'}
+      ${state.owner ? `
+        <form id="own-fc" class="hyp" style="margin-top:16px">
+          <h3>Tulis perkiraan sendiri</h3>
+          <label for="fc-from">Berangkat dari peristiwa</label>
+          <select id="fc-from" style="width:100%">${options}</select>
+          <label for="fc-text">Perkiraan Anda</label>
+          <textarea id="fc-text" rows="3" style="width:100%" placeholder="Contoh: harga BBM nonsubsidi naik dalam sebulan" required></textarea>
+          <label for="fc-days">Dicek dalam</label>
+          <select id="fc-days"><option value="7">7 hari</option><option value="14">14 hari</option><option value="30" selected>30 hari</option><option value="60">60 hari</option><option value="90">90 hari</option></select>
+          <div class="row-end" style="justify-content:flex-start"><button type="submit" class="btn primary">Catat perkiraan</button></div>
+        </form>` : ''}
+    </section>`;
+}
+
+function bindChainForecast(f, d) {
+  const nodes = chainNodes(f, d);
+  const hyps = nodes.flatMap((ev) => (ev.dampak || []).map((h) => ({ ev, h })));
+  view.querySelectorAll('[data-chyp]').forEach((b) => b.addEventListener('click', async () => {
+    const x = hyps[Number(b.dataset.chyp)];
+    b.disabled = true;
+    try {
+      await api('/api/forecasts', { method: 'POST', body: JSON.stringify({ event_id: x.ev.id, teks: x.h.teks, hari: x.h.hari }) });
+      b.textContent = 'Tercatat di Perkiraan';
+      toast('Perkiraan dicatat.');
+    } catch (e) {
+      b.disabled = false;
+      toast(e.message);
+    }
+  }));
+  const form = $('#own-fc');
+  if (form) form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const teks = $('#fc-text').value.trim();
+    if (!teks) return;
+    const btn = form.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      await api('/api/forecasts', { method: 'POST', body: JSON.stringify({ event_id: Number($('#fc-from').value), teks, hari: Number($('#fc-days').value) }) });
+      $('#fc-text').value = '';
+      toast('Perkiraan dicatat. Lihat di tab Perkiraan.');
+    } catch (err) {
+      toast(err.message);
+    }
+    btn.disabled = false;
+  });
 }
 
 // ---------- Sektor ----------
@@ -502,7 +580,7 @@ async function renderPerkiraan() {
     <section class="section"><div class="section-head"><h2>Waktunya dicek</h2><span class="muted small">${due.length}</span></div>
       ${due.length ? due.map((f) => fc(f, true)).join('') : '<p class="muted">Tidak ada yang jatuh tempo.</p>'}</section>
     <section class="section"><div class="section-head"><h2>Menunggu</h2><span class="muted small">${wait.length}</span></div>
-      ${wait.length ? wait.map((f) => fc(f)).join('') : `<p class="muted">${state.owner ? 'Buka peristiwa, lalu pilih "Catat sebagai perkiraan" pada dampak yang mungkin terjadi.' : 'Belum ada perkiraan.'}</p>`}</section>
+      ${wait.length ? wait.map((f) => fc(f)).join('') : `<p class="muted">${state.owner ? 'Buka tab Rantai, pilih satu peristiwa, lalu catat perkiraan di bagian "Perkiraan dari rantai ini". Bisa juga dari panel detail peristiwa.' : 'Belum ada perkiraan.'}</p>`}</section>
     ${done.length ? `<section class="section"><div class="section-head"><h2>Selesai</h2></div>${done.map((f) => fc(f)).join('')}</section>` : ''}`;
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openEvent(Number(b.dataset.open))));
   view.querySelectorAll('[data-fc]').forEach((b) => b.addEventListener('click', async () => {
