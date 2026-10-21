@@ -81,9 +81,11 @@ async function loadStatus() {
   document.querySelectorAll('.owner-only').forEach((el) => (el.hidden = !state.owner));
   $('#owner-btn').textContent = state.owner ? 'Keluar dari mode pemilik' : 'Masuk sebagai pemilik';
   const r = state.status.lastRun;
-  $('#last-update').textContent = r
-    ? `Diperbarui ${waktu(r.finished_at || r.started_at)}${r.status === 'gagal' ? ' (gagal)' : ''}`
-    : 'Belum pernah diperbarui';
+  $('#last-update').textContent = !r
+    ? 'Belum pernah diperbarui'
+    : r.status === 'antre' || r.status === 'berjalan'
+      ? 'Pembaruan sedang diproses'
+      : `Diperbarui ${waktu(r.finished_at || r.started_at)}${r.status === 'gagal' ? ' (gagal)' : ''}`;
   const pending = state.status.counts?.links_pending || 0;
   const badge = $('#badge');
   badge.hidden = !(state.owner && pending);
@@ -141,7 +143,9 @@ function go(tab, opts = {}) {
 async function renderTinjau() {
   const d = await api('/api/review');
   const run = d.lastRun;
-  const runInfo = run
+  const runInfo = run && (run.status === 'antre' || run.status === 'berjalan')
+    ? 'Pembaruan sedang diproses.'
+    : run
     ? `Pembaruan terakhir ${waktu(run.started_at)}: ${run.status === 'gagal' ? 'gagal' : `${run.n_articles} berita baru, ${run.n_events} peristiwa, ${run.n_links} usulan kaitan`}.`
     : 'Belum ada pembaruan. Ambil berita pertama sekarang.';
   const aiUsed = state.status?.counts?.ai_calls || 0;
@@ -175,6 +179,7 @@ async function renderTinjau() {
     </section>`;
 
   $('#run-btn').addEventListener('click', runNow);
+  if (run && (run.status === 'antre' || run.status === 'berjalan')) waitForRun(run.id);
   view.querySelectorAll('[data-link-action]').forEach((b) => b.addEventListener('click', decideLink));
   view.querySelectorAll('[data-archive]').forEach((b) => b.addEventListener('click', archiveEvent));
   view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openEvent(Number(b.dataset.open))));
@@ -209,24 +214,52 @@ function freshHtml(e) {
   </div>`;
 }
 
+let pollTimer;
 async function runNow() {
   const btn = $('#run-btn');
-  const msg = $('#run-msg');
   btn.disabled = true;
-  btn.textContent = 'Sedang mengambil…';
-  msg.textContent = 'Mengambil berita dari media lokal dan internasional, lalu AI menyusun peristiwa dan kaitannya. Biasanya 1–2 menit; jangan tutup halaman ini.';
+  btn.textContent = 'Masuk antrean…';
   try {
     const r = await api('/api/run', { method: 'POST', body: JSON.stringify({ days: Number($('#run-days').value) }) });
     if (!r.ok) throw new Error(r.message || 'Pembaruan gagal.');
-    toast(`Selesai: ${r.events} peristiwa baru, ${r.links} usulan kaitan.`);
-    await loadStatus();
-    go('tinjau');
+    waitForRun(r.runId);
   } catch (e) {
-    msg.textContent = 'Pembaruan gagal: ' + e.message;
+    $('#run-msg').textContent = 'Pembaruan gagal: ' + e.message;
     btn.disabled = false;
     btn.textContent = 'Ambil berita sekarang';
-    loadStatus();
   }
+}
+
+/** Pantau pembaruan yang antre sampai selesai, lalu muat ulang Tinjau. */
+function waitForRun(runId) {
+  clearInterval(pollTimer);
+  const started = Date.now();
+  const show = (run) => {
+    const msg = $('#run-msg');
+    const btn = $('#run-btn');
+    if (!msg || !btn) return;
+    btn.disabled = true;
+    btn.textContent = run && run.status === 'berjalan' ? 'Sedang diproses…' : 'Menunggu giliran…';
+    msg.textContent = run && run.status === 'berjalan'
+      ? 'Mengambil berita dari media lokal dan internasional, lalu AI menyusun peristiwa dan kaitannya (±1–2 menit).'
+      : 'Permintaan tercatat. Cloudflare memprosesnya paling lambat 5 menit lagi. Halaman ini akan memperbarui sendiri; boleh juga ditutup.';
+  };
+  show({ status: 'antre' });
+  pollTimer = setInterval(async () => {
+    try {
+      await loadStatus();
+      const run = state.status.lastRun;
+      if (!run || run.id !== runId) return;
+      if (run.status === 'selesai' || run.status === 'gagal') {
+        clearInterval(pollTimer);
+        toast(run.status === 'selesai' ? `Selesai: ${run.n_events} peristiwa baru, ${run.n_links} usulan kaitan.` : 'Pembaruan gagal. Lihat catatan pembaruan.');
+        if (state.tab === 'tinjau') go('tinjau');
+      } else {
+        show(run);
+      }
+      if (Date.now() - started > 15 * 60000) clearInterval(pollTimer);
+    } catch (e) { /* coba lagi pada putaran berikutnya */ }
+  }, 15000);
 }
 
 async function decideLink(e) {

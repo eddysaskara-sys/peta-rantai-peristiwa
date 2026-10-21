@@ -7,7 +7,7 @@ import { wibDate, wibDateDaysAgo, nowIso, parseList, matchLabels } from './util.
  * Satu kali pembaruan: ambil berita -> AI menyusun peristiwa -> AI mengusulkan kaitan.
  * Kaitan disimpan sebagai "usulan"; pemilik yang memutuskan setujui/tolak.
  */
-export async function runPipeline(env, { trigger = 'manual', days = 1 } = {}) {
+export async function runPipeline(env, { trigger = 'manual', days = 1, runId: queuedId = null } = {}) {
   const db = env.DB;
   const busy = await db
     .prepare("SELECT id FROM runs WHERE status = 'berjalan' AND started_at > ? LIMIT 1")
@@ -15,11 +15,16 @@ export async function runPipeline(env, { trigger = 'manual', days = 1 } = {}) {
     .first();
   if (busy) return { ok: false, message: 'Pembaruan lain sedang berjalan. Tunggu beberapa menit.' };
 
-  const run = await db
-    .prepare('INSERT INTO runs (started_at, trigger, status) VALUES (?, ?, ?) RETURNING id')
-    .bind(nowIso(), trigger, 'berjalan')
-    .first();
-  const runId = run.id;
+  let runId = queuedId;
+  if (runId) {
+    await db.prepare("UPDATE runs SET status = 'berjalan', started_at = ? WHERE id = ?").bind(nowIso(), runId).run();
+  } else {
+    const run = await db
+      .prepare('INSERT INTO runs (started_at, trigger, status) VALUES (?, ?, ?) RETURNING id')
+      .bind(nowIso(), trigger, 'berjalan')
+      .first();
+    runId = run.id;
+  }
   const notes = [];
 
   try {
@@ -120,6 +125,36 @@ export async function runPipeline(env, { trigger = 'manual', days = 1 } = {}) {
     await finish(db, runId, 'gagal', {}, [...notes, String(e.message || e)]);
     return { ok: false, runId, message: String(e.message || e) };
   }
+}
+
+/**
+ * Pemilik meminta pembaruan: dicatat sebagai antrean lalu diproses oleh jadwal
+ * berikutnya (tiap 5 menit). Dengan begitu permintaan dari browser selesai cepat
+ * dan tidak terputus oleh batas waktu proxy.
+ */
+export async function enqueueRun(env, days) {
+  const db = env.DB;
+  const pending = await db.prepare("SELECT id FROM runs WHERE status IN ('antre','berjalan') ORDER BY id DESC LIMIT 1").first();
+  if (pending) return { ok: true, runId: pending.id, already: true };
+  const row = await db
+    .prepare("INSERT INTO runs (started_at, trigger, status, note) VALUES (?, 'manual', 'antre', ?) RETURNING id")
+    .bind(nowIso(), `days=${days}`)
+    .first();
+  return { ok: true, runId: row.id, already: false };
+}
+
+/** Dipanggil jadwal tiap 5 menit: jalankan antrean bila ada, bereskan yang macet. */
+export async function processQueue(env) {
+  const db = env.DB;
+  await db
+    .prepare("UPDATE runs SET status = 'gagal', finished_at = ?, note = COALESCE(note,'') || '\nTerhenti (melewati 15 menit).' WHERE status = 'berjalan' AND started_at < ?")
+    .bind(nowIso(), new Date(Date.now() - 15 * 60000).toISOString())
+    .run();
+  const q = await db.prepare("SELECT id, note FROM runs WHERE status = 'antre' ORDER BY id LIMIT 1").first();
+  if (!q) return null;
+  const days = Number(/days=(\d+)/.exec(q.note || '')?.[1]) || 1;
+  await db.prepare('UPDATE runs SET note = NULL WHERE id = ?').bind(q.id).run();
+  return runPipeline(env, { trigger: 'manual', days, runId: q.id });
 }
 
 async function finish(db, runId, status, counts, notes) {

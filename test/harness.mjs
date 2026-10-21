@@ -75,6 +75,13 @@ const call = async (method, path, body, pin) => {
   let j; try { j = JSON.parse(t); } catch { j = t; }
   return [r.status, j];
 };
+const doRun = async (days) => {
+  const [s, d] = await call('POST', '/api/run', { days }, 'rahasia123');
+  if (s !== 200 || !d.runId) return [s, d];
+  let p;
+  await worker.scheduled({ cron: '*/5 * * * *' }, env, { waitUntil(x) { p = x; } });
+  return [s, await p];
+};
 const ok = (cond, msg) => { console.log((cond ? 'LULUS ' : 'GAGAL ') + msg); if (!cond) process.exitCode = 1; };
 
 let [s, d] = await call('GET', '/api/status');
@@ -87,7 +94,7 @@ ok(s === 401, 'run tanpa PIN ditolak');
 ok(s === 401, 'run dengan PIN salah ditolak');
 
 console.log('... menjalankan pembaruan pertama (menunggu jeda GDELT)');
-[s, d] = await call('POST', '/api/run', { days: 1 }, 'rahasia123');
+[s, d] = await doRun(1);
 console.log(JSON.stringify(d));
 ok(s === 200 && d.events === 3 && d.links === 2, 'pembaruan 1: 3 peristiwa, 2 kaitan valid');
 const ev = sq.prepare('SELECT * FROM events').all();
@@ -130,7 +137,7 @@ ok(mg.global === 1 && mg.terbaru, 'statistik sektor');
 
 console.log('... pembaruan kedua (berita baru, ada peristiwa lama)');
 round = 1; failSchemaOnce = false;
-[s, d] = await call('POST', '/api/run', { days: 3 }, 'rahasia123');
+[s, d] = await doRun(3);
 console.log(JSON.stringify(d));
 ok(s === 200 && d.events === 3, 'pembaruan 2 berhasil');
 const l2 = sq.prepare("SELECT * FROM links WHERE run_id = ?").all(d.runId);
@@ -138,7 +145,7 @@ ok(l2.some((l) => l.jenis === 'menyebabkan' && l.alasan === 'Lama ke baru'), 'ka
 ok(!l2.some((l) => l.alasan === 'lama-lama ditolak'), 'kaitan lama->lama ditolak');
 
 round = 1;
-[s, d] = await call('POST', '/api/run', { days: 1 }, 'rahasia123');
+[s, d] = await doRun(1);
 ok(s === 200 && d.events === 0, 'pembaruan tanpa berita baru tidak memanggil AI');
 
 const evId = sq.prepare('SELECT id FROM events LIMIT 1').get().id;
@@ -157,3 +164,16 @@ console.log('AI dipanggil', aiCalls, 'kali; tercatat', d.counts.ai_calls);
 ok(d.counts.ai_calls === 4, 'pemakaian AI tercatat (4 panggilan)');
 [s, d] = await call('GET', '/api/tidak-ada');
 ok(s === 404, 'alamat tak dikenal -> 404');
+
+// antrean: permintaan ganda tidak membuat antrean baru, jadwal harian tetap jalan
+let [a1, q1] = await call('POST', '/api/run', { days: 2 }, 'rahasia123');
+let [a2, q2] = await call('POST', '/api/run', { days: 2 }, 'rahasia123');
+ok(q1.runId === q2.runId && q2.already === true, 'permintaan ganda memakai antrean yang sama');
+[s, d] = await call('GET', '/api/status');
+ok(d.lastRun.status === 'antre', 'status menampilkan antrean');
+let p2; await worker.scheduled({ cron: '30 10 * * *' }, env, { waitUntil(x) { p2 = x; } }); const daily = await p2;
+ok(daily.ok === true, 'jadwal harian berjalan');
+let p3; await worker.scheduled({ cron: '*/5 * * * *' }, env, { waitUntil(x) { p3 = x; } }); const fromQ = await p3;
+ok(fromQ && fromQ.runId === q1.runId, 'antrean diproses oleh jadwal 5 menit');
+let p4; await worker.scheduled({ cron: '*/5 * * * *' }, env, { waitUntil(x) { p4 = x; } });
+ok((await p4) === null, 'jadwal 5 menit tanpa antrean tidak melakukan apa-apa');

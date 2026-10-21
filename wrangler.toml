@@ -17,10 +17,11 @@ binding = "DB"
 database_name = "peta-rantai-db"
 database_id = "4957dd25-676b-49cb-b4e8-21db098472f0"
 
-# Pembaruan otomatis setiap hari pukul 17.30 WIB (10.30 UTC),
-# supaya hasilnya siap ditinjau malam hari.
+# "30 10 * * *": pembaruan otomatis setiap hari pukul 17.30 WIB (10.30 UTC),
+#                supaya hasilnya siap ditinjau malam hari.
+# "*/5 * * * *": memproses permintaan "Ambil berita sekarang" yang sedang antre.
 [triggers]
-crons = ["30 10 * * *"]
+crons = ["30 10 * * *", "*/5 * * * *"]
 
 [observability]
 enabled = true

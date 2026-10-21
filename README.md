@@ -20,19 +20,36 @@ GDELT + RSS  ──►  Workers AI  ──►  D1  ──►  Tinjau: setujui / 
 - **AI:** Cloudflare Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`), dibatasi 30 panggilan per hari agar tetap dalam kuota gratis.
 - **Data:** Cloudflare D1 `peta-rantai-db` (skema di `schema.sql`, sudah dibuat).
 
-## Deploy pertama kali (sekali saja, ± 5 menit)
+## Alamat aplikasi
+
+- **Untuk dibuka (pengguna & penguji):** situs Netlify (lihat langkah di bawah).
+- **Mesin di Cloudflare:** `https://peta-rantai-peristiwa.eddysaskara.workers.dev`.
+  Alamat `*.workers.dev` tidak bisa dibuka dari sebagian jaringan internet di Indonesia,
+  jadi Netlify dipakai sebagai pintu depan yang meneruskan `/api/*` ke Worker (`netlify.toml`).
+
+## Pintu depan Netlify (sekali saja, ± 3 menit)
+
+1. Masuk ke **app.netlify.com** (boleh pakai akun GitHub).
+2. **Add new project → Import an existing project → GitHub**, pilih repo `peta-rantai-peristiwa`.
+3. Biarkan semua pengaturan apa adanya (dibaca dari `netlify.toml`), klik **Deploy**.
+4. Opsional: **Project configuration → Change project name** menjadi misalnya `peta-rantai-peristiwa`,
+   sehingga alamatnya `https://peta-rantai-peristiwa.netlify.app`.
+
+## Deploy Cloudflare Worker (sekali saja, ± 5 menit)
 
 1. Buka **dash.cloudflare.com → Workers & Pages → Create application**.
 2. Pilih **Import a repository**, sambungkan GitHub bila diminta, lalu pilih repo `peta-rantai-peristiwa`.
 3. Pastikan **Project name** = `peta-rantai-peristiwa` (harus sama dengan `name` di `wrangler.toml`).
    Biarkan *Build command* kosong dan *Deploy command* `npx wrangler deploy`. Klik **Create and deploy**.
-4. Setelah selesai, buka **Settings → Variables and Secrets → Add**:
+4. Setelah selesai, buka **Settings → Variables and Secrets → Add**
+   (bagian runtime, **bukan** "Build → Variables and secrets"):
    - Type: **Secret**
    - Variable name: `ADMIN_PIN`
    - Value: PIN pilihan Anda (minimal 6 karakter, jangan dibagikan)
    Klik **Deploy**.
-5. Buka alamat `https://peta-rantai-peristiwa.<subdomain-anda>.workers.dev`,
-   klik **Masuk sebagai pemilik**, masukkan PIN, lalu di **Tinjau** pilih *7 hari terakhir* dan **Ambil berita sekarang**.
+5. Buka alamat Netlify, klik **Masuk sebagai pemilik**, masukkan PIN, lalu di **Tinjau** pilih
+   *7 hari terakhir* dan **Ambil berita sekarang**. Permintaan masuk antrean dan diproses Cloudflare
+   paling lambat 5 menit kemudian (jadwal `*/5 * * * *`).
 
 Setelah itu setiap perubahan kode yang di-push ke GitHub otomatis tayang.
 

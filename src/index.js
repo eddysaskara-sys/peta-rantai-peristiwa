@@ -1,4 +1,6 @@
-import { runPipeline } from './pipeline.js';
+import { runPipeline, enqueueRun, processQueue } from './pipeline.js';
+
+const DAILY_CRON = '30 10 * * *';
 import { SEKTOR, INDIKATOR, JENIS, AI_DAILY_LIMIT } from './constants.js';
 import { json, parseList, safeEqual, wibDate, wibDateDaysAgo, addDays, nowIso } from './util.js';
 
@@ -12,9 +14,12 @@ export default {
     }
   },
 
-  // Pembaruan otomatis harian (lihat [triggers] di wrangler.toml).
+  // Jadwal (lihat [triggers] di wrangler.toml):
+  // - 17.30 WIB: pembaruan otomatis harian
+  // - tiap 5 menit: jalankan permintaan "Ambil berita sekarang" yang sedang antre
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runPipeline(env, { trigger: 'jadwal', days: 1 }));
+    if (event.cron === DAILY_CRON) ctx.waitUntil(runPipeline(env, { trigger: 'jadwal', days: 1 }));
+    else ctx.waitUntil(processQueue(env));
   },
 };
 
@@ -237,8 +242,7 @@ async function route(request, env) {
     if (deny) return deny;
     const b = await body(request);
     const days = Math.max(1, Math.min(7, Number(b.days) || 1));
-    const result = await runPipeline(env, { trigger: 'manual', days });
-    return json(result, result.ok ? 200 : 409);
+    return json(await enqueueRun(env, days));
   }
 
   // ---------- Kaitan ----------

@@ -1,0 +1,12 @@
+# Netlify hanya menjadi "pintu depan": menyajikan halaman web dari folder public,
+# lalu meneruskan /api/* ke Cloudflare Worker. Ini diperlukan karena alamat
+# *.workers.dev tidak bisa dibuka dari sebagian jaringan internet di Indonesia.
+[build]
+  publish = "public"
+  command = "echo 'Situs statis: tidak ada langkah build'"
+
+[[redirects]]
+  from = "/api/*"
+  to = "https://peta-rantai-peristiwa.eddysaskara.workers.dev/api/:splat"
+  status = 200
+  force = true
