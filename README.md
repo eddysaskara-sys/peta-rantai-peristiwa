@@ -11,13 +11,13 @@ Final project Mini Bootcamp *Claude for Non-Tech Professional* (MBCL Cohort 3).
 
 ```
 17.30 WIB (otomatis)                     Malam (pemilik, ≤ 5 menit)
-GDELT + RSS  ──►  Workers AI  ──►  D1  ──►  Tinjau: setujui / tolak kaitan
+RSS 12 feed  ──►  Workers AI  ──►  D1  ──►  Tinjau: setujui / tolak kaitan
 (lokal & intl)   (peristiwa +           ──►  Rantai, Linimasa, Sektor, Perkiraan
                   usulan kaitan)              (terbuka untuk penguji, baca saja)
 ```
 
-- **Sumber berita:** GDELT DOC 2.0 API (gratis, tanpa key) dan RSS CNBC Indonesia, Antara, Al Jazeera.
-- **AI:** Cloudflare Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`), dibatasi 30 panggilan per hari agar tetap dalam kuota gratis.
+- **Sumber berita:** RSS dari 7 media Indonesia (CNBC Indonesia, CNN Indonesia, Detik, Liputan6, Republika, Okezone, Antara) dan 4 media internasional (Al Jazeera, NPR, OilPrice, Investing.com). GDELT sempat dipakai tetapi ditolak dari jaringan Cloudflare, sehingga dinonaktifkan.
+- **AI:** Cloudflare Workers AI, model utama `@cf/openai/gpt-oss-120b` dengan cadangan `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, dibatasi 40 panggilan per hari agar tetap dalam kuota gratis.
 - **Data:** Cloudflare D1 `peta-rantai-db` (skema di `schema.sql`, sudah dibuat).
 
 ## Alamat aplikasi

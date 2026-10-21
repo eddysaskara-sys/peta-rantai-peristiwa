@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const worker = (await import(ROOT + '/src/index.js')).default;
+const { cleanTitle } = await import(ROOT + '/src/sources.js');
 
 // ---- D1 tiruan ----
 const sq = new DatabaseSync(':memory:');
@@ -62,10 +63,12 @@ globalThis.fetch = async (url) => {
                      : [gd('Oil jumps as Hormuz tensions rise', 1, 'United States'), gd('Tankers rerouted from Strait of Hormuz', 2, 'United Kingdom')];
     return new Response(JSON.stringify({ articles: arts }));
   }
+  if (url.includes('cnbcindonesia.com/news')) return new Response(`<rss><channel><item><title>BI Rate tetap 5,75%</title><link>https://cnbcindonesia.com/r${round}/bi</link><pubDate>${new Date(now - 1800e3).toUTCString()}</pubDate></item><item><title>Harga beras naik</title><link>https://cnbcindonesia.com/r${round}/beras</link><pubDate>${new Date(now - 2400e3).toUTCString()}</pubDate></item></channel></rss>`);
+  if (url.includes('oilprice')) return new Response(`<rss><channel><item><title>Oil jumps as Hormuz tensions rise</title><link>https://oilprice.com/r${round}/1</link><pubDate>${new Date(now - 3000e3).toUTCString()}</pubDate></item><item><title>Tankers rerouted from Strait of Hormuz</title><link>https://oilprice.com/r${round}/2</link><pubDate>${new Date(now - 3300e3).toUTCString()}</pubDate></item></channel></rss>`);
   if (url.includes('cnbcindonesia')) return new Response(`<rss><channel><item><title><![CDATA[Harga BBM nonsubsidi naik &amp; antre]]></title><link>https://cnbcindonesia.com/r${round}/1</link><pubDate>${new Date(now - 3600e3).toUTCString()}</pubDate></item><item><title>Berita lama sekali</title><link>https://cnbcindonesia.com/old</link><pubDate>Mon, 01 Jan 2024 00:00:00 +0000</pubDate></item></channel></rss>`);
   if (url.includes('antaranews')) return new Response('nope', { status: 500 });
   if (url.includes('aljazeera')) return new Response(`<rss><channel><item><title>Drought hits wheat harvest in Europe &#039;badly&#039;</title><link>https://aljazeera.com/r${round}/a</link><pubDate>${new Date(now - 7200e3).toUTCString()}</pubDate></item></channel></rss>`);
-  throw new Error('unexpected fetch ' + url);
+  return new Response('<rss><channel></channel></rss>');
 };
 
 const env = { DB, AI, ADMIN_PIN: 'rahasia123', ASSETS: { fetch: async () => new Response('<html>aset</html>') } };
@@ -103,11 +106,11 @@ ok(ev[0].dua_sisi !== '' , 'dua sisi dipertahankan bila ada sumber lokal+interna
 ok(ev[1].dua_sisi === '', 'dua sisi dibuang bila hanya satu sisi');
 ok(JSON.parse(ev[2].dampak)[0].hari === 120, 'horizon dampak dibatasi 120 hari');
 const arts = sq.prepare('SELECT title FROM articles').all().map((a) => a.title);
-ok(arts.includes('BI Rate Tetap di 5,75%, Rupiah Tertekan'), 'judul GDELT dirapikan: ' + arts[0]);
+ok(cleanTitle('BI Rate Tetap di 5 , 75 %, Rupiah') === 'BI Rate Tetap di 5,75%, Rupiah', 'judul gaya GDELT dirapikan');
 ok(!arts.includes('Berita lama sekali'), 'berita di luar rentang waktu dibuang');
 ok(arts.some((a) => a.includes("'badly'")), 'entitas HTML didekode');
 const run1 = sq.prepare('SELECT * FROM runs').all()[0];
-ok(/antaranews/.test(run1.note) && /GDELT #4/.test(run1.note), 'sumber gagal tercatat di catatan: ' + JSON.stringify(run1.note));
+ok(/antaranews/.test(run1.note) && /Berita per sumber/.test(run1.note) && /AI peristiwa/.test(run1.note), 'catatan memuat sumber gagal, jumlah per sumber, dan hasil AI');
 
 [s, d] = await call('GET', '/api/review', null, 'rahasia123');
 ok(s === 200 && d.pending.length === 2 && d.fresh.length === 3, 'tinjau: 2 usulan, 3 peristiwa baru');

@@ -45,19 +45,27 @@ export const INDIKATOR = [
 
 export const JENIS = ['menyebabkan', 'memperkuat', 'meredam', 'memicu respons'];
 
-// Kueri GDELT: dua untuk media Indonesia, dua untuk media internasional berbahasa Inggris.
-export const GDELT_QUERIES = [
-  '(inflasi OR "suku bunga" OR rupiah OR IHSG OR "harga emas" OR "harga minyak" OR "BI Rate") sourcecountry:indonesia',
-  '(pangan OR beras OR pupuk OR sawit OR panen OR tambang OR nikel OR batubara OR tekstil OR ekspor) sourcecountry:indonesia',
-  '("oil prices" OR OPEC OR "Federal Reserve" OR inflation OR tariff OR "central bank") sourcelang:english',
-  '(drought OR "food prices" OR "Strait of Hormuz" OR "Red Sea" OR sanctions OR "supply chain" OR "commodity prices") sourcelang:english',
-];
+// GDELT dinonaktifkan: dalam uji 21 Okt 2026 semua kueri dari Cloudflare ditolak
+// ("limit requests to one every 5 seconds") karena alamat IP Cloudflare dipakai bersama.
+// Kode pengambilnya tetap ada; isi daftar ini untuk mengaktifkannya kembali.
+export const GDELT_QUERIES = [];
 
+// Semua feed di bawah sudah dicek aktif pada 21 Okt 2026.
 export const RSS_FEEDS = [
+  // Media Indonesia
   { url: 'https://www.cnbcindonesia.com/news/rss', source: 'cnbcindonesia.com', origin: 'lokal' },
   { url: 'https://www.cnbcindonesia.com/market/rss', source: 'cnbcindonesia.com', origin: 'lokal' },
+  { url: 'https://www.cnnindonesia.com/ekonomi/rss', source: 'cnnindonesia.com', origin: 'lokal' },
+  { url: 'https://finance.detik.com/rss', source: 'detik.com', origin: 'lokal' },
+  { url: 'https://feed.liputan6.com/rss/bisnis', source: 'liputan6.com', origin: 'lokal' },
+  { url: 'https://www.republika.co.id/rss/ekonomi', source: 'republika.co.id', origin: 'lokal' },
+  { url: 'https://sindikasi.okezone.com/index.php/rss/11/RSS2.0', source: 'okezone.com', origin: 'lokal' },
   { url: 'https://www.antaranews.com/rss/terkini.xml', source: 'antaranews.com', origin: 'lokal' },
+  // Media internasional
   { url: 'https://www.aljazeera.com/xml/rss/all.xml', source: 'aljazeera.com', origin: 'internasional' },
+  { url: 'https://feeds.npr.org/1006/rss.xml', source: 'npr.org', origin: 'internasional' },
+  { url: 'https://oilprice.com/rss/main', source: 'oilprice.com', origin: 'internasional' },
+  { url: 'https://www.investing.com/rss/news_14.rss', source: 'investing.com', origin: 'internasional' },
 ];
 
 // Jumlah maksimum judul berita yang dikirim ke AI per pembaruan.
