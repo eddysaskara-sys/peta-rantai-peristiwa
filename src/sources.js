@@ -7,6 +7,7 @@ const MAX_XML = 150_000; // batasi ukuran yang diproses agar hemat CPU
 /** Ambil semua sumber berita. Sumber yang gagal dicatat, tidak menghentikan proses. */
 export async function collectHeadlines(days) {
   const errors = [];
+  const stats = [];
   const timespan = `${Math.max(1, Math.min(7, days))}d`;
 
   const rssPromise = Promise.all(
@@ -15,7 +16,9 @@ export async function collectHeadlines(days) {
         const r = await fetch(feed.url, { headers: { 'User-Agent': UA } });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const xml = (await r.text()).slice(0, MAX_XML);
-        return parseRss(xml, feed.source, feed.origin, 30);
+        const items = parseRss(xml, feed.source, feed.origin, 30);
+        stats.push(`${feed.source}: ${items.length}`);
+        return items;
       } catch (e) {
         errors.push(`${feed.source}: ${e.message}`);
         return [];
@@ -23,21 +26,34 @@ export async function collectHeadlines(days) {
     })
   );
 
-  // GDELT membatasi kira-kira 1 permintaan per 5 detik, jadi dijalankan berurutan.
+  // GDELT membatasi kira-kira 1 permintaan per 5 detik per alamat IP. Alamat IP Cloudflare
+  // dipakai bersama banyak pengguna, jadi diberi jeda lebih lama dan satu kali coba ulang.
   const gdelt = [];
   for (let i = 0; i < GDELT_QUERIES.length; i++) {
-    if (i > 0) await sleep(5500);
-    try {
-      gdelt.push(...(await fetchGdelt(GDELT_QUERIES[i], timespan)));
-    } catch (e) {
-      errors.push(`GDELT #${i + 1}: ${e.message}`);
+    if (i > 0) await sleep(7000);
+    let items = null;
+    for (let attempt = 0; attempt < 2 && items === null; attempt++) {
+      try {
+        items = await fetchGdelt(GDELT_QUERIES[i], timespan);
+      } catch (e) {
+        if (attempt === 0 && /limit requests|429/i.test(e.message)) {
+          await sleep(12000);
+        } else {
+          errors.push(`GDELT #${i + 1}: ${e.message.slice(0, 80)}`);
+          break;
+        }
+      }
+    }
+    if (items) {
+      stats.push(`GDELT #${i + 1}: ${items.length}`);
+      gdelt.push(...items);
     }
   }
 
   const rss = (await rssPromise).flat();
   const cutoff = Date.now() - (days + 1) * 86400000;
   const all = [...gdelt, ...rss].filter((a) => !a.published_at || Date.parse(a.published_at) >= cutoff);
-  return { headlines: selectHeadlines(all), errors };
+  return { headlines: selectHeadlines(all), errors, stats };
 }
 
 export async function fetchGdelt(query, timespan) {

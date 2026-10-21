@@ -29,7 +29,8 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
 
   try {
     // 1. Ambil berita
-    const { headlines, errors } = await collectHeadlines(days);
+    const { headlines, errors, stats = [] } = await collectHeadlines(days);
+    notes.push('Berita per sumber: ' + stats.join(', '));
     notes.push(...errors.map((e) => 'Sumber gagal: ' + e));
 
     // 2. Simpan berita yang belum pernah dilihat
@@ -54,8 +55,11 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
 
     // 3. AI menyusun peristiwa
     const cp = clusterPrompt(headlines2);
-    const clustered = await runJson(env, cp.system, cp.user, CLUSTER_SCHEMA);
+    const m1 = {};
+    const clustered = await runJson(env, cp.system, cp.user, CLUSTER_SCHEMA, m1);
     const events = normalizeEvents(clustered, headlines2);
+    notes.push(`AI peristiwa (${m1.model}): ${clustered.peristiwa.length} diusulkan, ${events.length} lolos pemeriksaan`);
+    if (m1.gagal.length) notes.push('Percobaan AI gagal: ' + m1.gagal.join(' | '));
 
     const newEvents = [];
     for (const ev of events) {
@@ -100,8 +104,11 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
       const oldEvents = oldRows.results.map((r) => ({ ...r, sektor: parseList(r.sektor) }));
       if (newEvents.length + oldEvents.length >= 2) {
         const lp = linkPrompt(newEvents, oldEvents);
-        const linked = await runJson(env, lp.system, lp.user, LINK_SCHEMA);
+        const m2 = {};
+        const linked = await runJson(env, lp.system, lp.user, LINK_SCHEMA, m2);
         const links = normalizeLinks(linked, newEvents, oldEvents);
+        notes.push(`AI kaitan (${m2.model}): ${linked.kaitan.length} diusulkan, ${links.length} lolos pemeriksaan`);
+        if (m2.gagal.length) notes.push('Percobaan AI gagal: ' + m2.gagal.join(' | '));
         const existing = await existingPairs(db, links);
         const toInsert = links.filter((l) => !existing.has(`${l.dari}-${l.ke}`) && !existing.has(`${l.ke}-${l.dari}`));
         if (toInsert.length) {
@@ -177,11 +184,12 @@ async function filterNew(db, headlines) {
   for (let i = 0; i < headlines.length; i += 90) {
     const chunk = headlines.slice(i, i + 90).map((h) => h.url);
     const rows = await db
-      .prepare(`SELECT url FROM articles WHERE url IN (${chunk.map(() => '?').join(',')})`)
+      .prepare(`SELECT url FROM articles WHERE used = 1 AND url IN (${chunk.map(() => '?').join(',')})`)
       .bind(...chunk)
       .all();
     rows.results.forEach((r) => known.add(r.url));
   }
+  // Berita yang pernah diambil tetapi belum masuk peristiwa mana pun boleh ditawarkan lagi ke AI.
   return headlines.filter((h) => !known.has(h.url));
 }
 

@@ -1,29 +1,58 @@
-import { MODEL, AI_DAILY_LIMIT, SEKTOR, INDIKATOR, JENIS } from './constants.js';
+import { MODEL, FALLBACK_MODEL, AI_DAILY_LIMIT, SEKTOR, INDIKATOR, JENIS } from './constants.js';
 import { wibDate } from './util.js';
 
 export class QuotaError extends Error {}
 
-/** Panggil Workers AI dan kembalikan objek JSON. */
-export async function runJson(env, system, user, schema) {
-  await bumpUsage(env);
-  const base = {
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    max_tokens: 3500,
-    temperature: 0.2,
-  };
-  let res;
-  try {
-    res = await env.AI.run(MODEL, { ...base, response_format: { type: 'json_schema', json_schema: schema } });
-  } catch (e) {
-    // Jika mode JSON tidak didukung, ulangi tanpa skema dan urai teksnya.
-    res = await env.AI.run(MODEL, base);
+/**
+ * Panggil Workers AI dan kembalikan objek JSON.
+ * Mencoba model utama dulu, lalu model cadangan bila gagal atau jawabannya tidak bisa dibaca.
+ * `meta` diisi nama model yang berhasil dan daftar percobaan yang gagal (untuk catatan pembaruan).
+ */
+export async function runJson(env, system, user, schema, meta = {}) {
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: user },
+  ];
+  const key = schema.required[0];
+  const attempts = [
+    { model: MODEL, input: { messages, max_tokens: 8000, reasoning: { effort: 'low' } } },
+    { model: MODEL, input: { messages, max_tokens: 8000 } },
+    { model: FALLBACK_MODEL, input: { messages, max_tokens: 3500, temperature: 0.2, response_format: { type: 'json_schema', json_schema: schema } } },
+    { model: FALLBACK_MODEL, input: { messages, max_tokens: 3500, temperature: 0.2 } },
+  ];
+  meta.gagal = [];
+  for (const a of attempts) {
+    await bumpUsage(env);
+    try {
+      const out = responseOf(await env.AI.run(a.model, a.input));
+      const data = out && typeof out === 'object' ? out : extractJson(String(out ?? ''));
+      if (!data || !Array.isArray(data[key])) throw new Error(`jawaban tanpa "${key}"`);
+      meta.model = a.model;
+      return data;
+    } catch (e) {
+      if (e instanceof QuotaError) throw e;
+      meta.gagal.push(`${a.model.split('/').pop()}: ${String(e.message || e).slice(0, 80)}`);
+    }
   }
-  const out = res && typeof res === 'object' && 'response' in res ? res.response : res;
-  if (out && typeof out === 'object') return out;
-  return extractJson(String(out ?? ''));
+  throw new Error('Semua model AI gagal: ' + meta.gagal.join(' | '));
+}
+
+/** Ambil isi jawaban dari berbagai bentuk respons Workers AI. */
+export function responseOf(res) {
+  if (res == null) return res;
+  if (typeof res !== 'object') return res;
+  if ('response' in res) return res.response;
+  const msg = res.choices?.[0]?.message;
+  if (msg) return msg.parsed ?? msg.content;
+  if (typeof res.output_text === 'string') return res.output_text;
+  if (Array.isArray(res.output)) {
+    return res.output
+      .filter((o) => o.type === 'message')
+      .flatMap((o) => o.content || [])
+      .map((c) => c.text || '')
+      .join('');
+  }
+  return res;
 }
 
 export function extractJson(text) {
@@ -85,20 +114,24 @@ export const CLUSTER_SCHEMA = {
 
 export function clusterPrompt(headlines) {
   const system = `Kamu analis ekonomi dan geopolitik yang membantu seorang investor di Indonesia memahami kaitan peristiwa global dan lokal.
-Tugas: dari daftar judul berita bernomor, susun daftar PERISTIWA penting.
+Tugas: dari daftar judul berita bernomor, susun daftar PERISTIWA yang penting bagi ekonomi dan pasar.
 Aturan:
-- Pilih hanya berita yang berdampak pada ekonomi, pasar keuangan, komoditas, kebijakan, perdagangan, atau geopolitik. Abaikan kriminal biasa, gosip, olahraga, hiburan, profil tokoh, dan tips konsumen.
-- Gabungkan beberapa berita yang membahas kejadian yang sama menjadi satu peristiwa.
-- Maksimal 12 peristiwa, urutkan dari yang paling berpengaruh.
+- Pilih hanya berita yang berdampak pada ekonomi makro, pasar keuangan, komoditas, energi, pangan, kebijakan pemerintah atau bank sentral, perdagangan, atau geopolitik yang dapat memengaruhi harga dan pasokan.
+- ABAIKAN: kasus kriminal dan korupsi perorangan, gosip, olahraga, hiburan, profil tokoh, tips konsumen, kecelakaan kecil, dan berita perusahaan asing yang tidak berkaitan dengan Indonesia atau komoditas.
+- Gabungkan berita yang membahas kejadian yang sama menjadi satu peristiwa dan cantumkan semua nomornya.
+- Maksimal 12 peristiwa, boleh lebih sedikit. Lebih baik 6 peristiwa yang relevan daripada 12 yang asal.
+- "judul": spesifik dan informatif, maksimal 14 kata, menyebut SIAPA/APA dan angkanya bila ada. Contoh baik: "BI menahan BI Rate di 5,75% dan menaikkan deposit facility". Contoh buruk: "Kebijakan BI", "Kebijakan Pemerintah", "Pengembangan Teknologi".
+- Pertahankan tingkat kepastian berita. Bila judul menyebut rumor, dugaan, rencana, atau prediksi, tulis tetap sebagai rumor/dugaan/rencana/prediksi. Jangan mengubahnya menjadi fakta.
 - "tingkat": "lokal" bila kejadiannya di Indonesia, "global" bila di luar Indonesia.
-- "sektor": 1 sampai 3 label, HANYA dari daftar: ${SEKTOR.join('; ')}.
-- "indikator": 0 sampai 3 label, HANYA dari daftar: ${INDIKATOR.join('; ')}.
-- "artikel": nomor berita yang menjadi sumber peristiwa itu. Wajib diisi.
-- "ringkasan": 1 sampai 2 kalimat faktual, hanya berdasarkan judul yang tersedia. Jangan menambah angka atau fakta yang tidak ada di judul.
-- "dua_sisi": bila sumber media Indonesia dan internasional menyorot sudut yang berbeda, jelaskan perbedaannya dalam 1 kalimat. Bila tidak ada, isi string kosong.
-- "dampak": 0 sampai 2 hipotesis dampak lanjutan yang masuk akal, masing-masing dengan "hari" = perkiraan jangka waktu (7 sampai 90 hari). Tulis sebagai hipotesis, bukan kepastian.
-- Seluruh teks dalam Bahasa Indonesia yang jelas.
-Jawab hanya dengan JSON sesuai skema.`;
+- "sektor": 1 sampai 3 label yang LANGSUNG terdampak, HANYA dari daftar: ${SEKTOR.join('; ')}.
+- "indikator": label indikator pasar yang LANGSUNG terpengaruh, HANYA dari daftar: ${INDIKATOR.join('; ')}. Kosongkan ([]) bila tidak ada hubungan langsung.
+- "artikel": nomor berita sumber. Wajib diisi.
+- "ringkasan": 1 sampai 2 kalimat faktual, hanya berdasarkan judul. Jangan menambah angka atau fakta yang tidak ada.
+- "dua_sisi": bila media Indonesia (ID) dan internasional (INTL) menyorot sudut berbeda untuk peristiwa yang sama, jelaskan dalam 1 kalimat. Bila tidak ada, string kosong.
+- "dampak": 0 sampai 2 hipotesis dampak lanjutan ke Indonesia, masing-masing {"teks": ..., "hari": jangka waktu 7 sampai 90}. Tulis sebagai hipotesis.
+- Seluruh teks dalam Bahasa Indonesia.
+Jawab HANYA dengan JSON tanpa teks lain, dengan bentuk:
+{"peristiwa":[{"judul":"","ringkasan":"","tingkat":"global|lokal","sektor":[],"indikator":[],"artikel":[1,2],"dua_sisi":"","dampak":[{"teks":"","hari":30}]}]}`;
   const lines = headlines.map(
     (h, i) => `${i + 1}. [${h.origin === 'lokal' ? 'ID' : 'INTL'} | ${h.source} | ${(h.published_at || '').slice(0, 10)}] ${h.title}`
   );
@@ -133,13 +166,22 @@ export function linkPrompt(newEvents, oldEvents) {
   const system = `Kamu analis rantai sebab-akibat ekonomi. Usulkan KAITAN antar peristiwa, dari PENYEBAB ke AKIBAT.
 Aturan:
 - Setiap kaitan wajib melibatkan minimal satu peristiwa berkode B (baru).
-- Usulkan kaitan hanya bila ada mekanisme ekonomi yang masuk akal (misalnya: harga minyak naik -> biaya impor BBM naik -> tekanan inflasi). Jangan mengaitkan hanya karena topiknya mirip.
+- Usulkan kaitan bila ada mekanisme ekonomi yang masuk akal. Jangan mengaitkan hanya karena topiknya mirip.
+- Jalur penularan yang umum antara peristiwa global dan Indonesia, sebagai panduan:
+  konflik di jalur pelayaran/produsen minyak -> harga minyak -> biaya BBM, subsidi energi, inflasi;
+  kebijakan The Fed/dolar AS -> arus modal -> rupiah -> BI Rate -> kredit dan IHSG;
+  cuaca ekstrem/gagal panen -> harga pangan global -> impor dan inflasi pangan;
+  harga batubara/sawit/nikel -> ekspor dan neraca dagang -> rupiah dan APBN;
+  tarif/sanksi dagang -> rantai pasok -> industri dan ekspor;
+  kebijakan BI/pemerintah -> likuiditas perbankan, daya beli, sektor terkait.
+- Kaitan antara dua peristiwa baru (B ke B) juga boleh.
 - Penyebab tidak boleh terjadi setelah akibat.
 - "jenis": salah satu dari ${JENIS.join(', ')}.
 - "alasan": 1 kalimat yang menjelaskan mekanismenya, dalam Bahasa Indonesia.
-- "keyakinan": angka 0 sampai 1, jujur. Kaitan yang lemah beri angka rendah.
-- Maksimal 15 kaitan. Lebih baik sedikit tapi kuat.
-Jawab hanya dengan JSON sesuai skema, gunakan kode peristiwa (mis. "B1", "L4").`;
+- "keyakinan": angka 0 sampai 1, jujur. Kaitan lemah beri angka rendah (0,2 sampai 0,4).
+- Maksimal 15 kaitan. Bila memang tidak ada kaitan yang masuk akal, kembalikan daftar kosong.
+Jawab HANYA dengan JSON tanpa teks lain, memakai kode peristiwa (mis. "B1", "L4"), dengan bentuk:
+{"kaitan":[{"dari":"B1","ke":"B2","jenis":"menyebabkan","alasan":"","keyakinan":0.6}]}`;
   const fmt = (e, code) =>
     `${code} [${e.tanggal} | ${e.tingkat} | ${(e.sektor || []).join(', ')}] ${e.judul}` +
     (e.ringkasan && code.startsWith('B') ? ` — ${e.ringkasan}` : '');

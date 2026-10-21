@@ -1,7 +1,9 @@
-export const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+// Model utama lebih kuat dalam mengikuti instruksi; model cadangan dipakai bila gagal.
+export const MODEL = '@cf/openai/gpt-oss-120b';
+export const FALLBACK_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
 // Batas panggilan AI per hari agar tetap di dalam kuota gratis Workers AI.
-export const AI_DAILY_LIMIT = 30;
+export const AI_DAILY_LIMIT = 40;
 
 export const SEKTOR = [
   'Energi',

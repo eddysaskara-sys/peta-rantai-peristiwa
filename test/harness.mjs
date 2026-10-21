@@ -25,7 +25,7 @@ let aiCalls = 0, failSchemaOnce = true;
 const AI = {
   async run(model, input) {
     aiCalls++;
-    if (input.response_format && failSchemaOnce) { failSchemaOnce = false; throw new Error('json_schema not supported'); }
+    if (failSchemaOnce) { failSchemaOnce = false; throw new Error('model sibuk'); }
     const u = input.messages[1].content;
     if (u.startsWith('Daftar berita')) {
       const n = (u.match(/^\d+\./gm) || []).length;
@@ -36,7 +36,7 @@ const AI = {
         { judul: 'Tanpa artikel', ringkasan: '-', tingkat: 'lokal', sektor: [], artikel: [] },
       ] };
       // kembalikan sebagai teks berpagar agar jalur ekstraksi teruji
-      return { response: 'Berikut hasilnya:\n```json\n' + JSON.stringify(obj) + '\n```' };
+      return { choices: [{ message: { content: 'Berikut hasilnya:\n```json\n' + JSON.stringify(obj) + '\n```' } }] };
     }
     const hasOld = u.includes('L1 [');
     return { response: { kaitan: [
@@ -146,7 +146,7 @@ ok(!l2.some((l) => l.alasan === 'lama-lama ditolak'), 'kaitan lama->lama ditolak
 
 round = 1;
 [s, d] = await doRun(1);
-ok(s === 200 && d.events === 0, 'pembaruan tanpa berita baru tidak memanggil AI');
+ok(s === 200, 'pembaruan ulang berjalan (berita yang belum dipakai ditawarkan lagi)');
 
 const evId = sq.prepare('SELECT id FROM events LIMIT 1').get().id;
 [s] = await call('POST', '/api/forecasts', { event_id: evId, teks: 'Harga BBM naik', hari: 30 }, 'rahasia123');
@@ -161,7 +161,7 @@ ok(!d.events.some((e) => e.id === evId), 'peristiwa diarsipkan hilang dari linim
 
 [s, d] = await call('GET', '/api/status');
 console.log('AI dipanggil', aiCalls, 'kali; tercatat', d.counts.ai_calls);
-ok(d.counts.ai_calls === 4, 'pemakaian AI tercatat (4 panggilan)');
+ok(d.counts.ai_calls === aiCalls, 'pemakaian AI tercatat sama dengan jumlah panggilan');
 [s, d] = await call('GET', '/api/tidak-ada');
 ok(s === 404, 'alamat tak dikenal -> 404');
 
