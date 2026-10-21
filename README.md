@@ -22,18 +22,14 @@ GDELT + RSS  ──►  Workers AI  ──►  D1  ──►  Tinjau: setujui / 
 
 ## Alamat aplikasi
 
-- **Untuk dibuka (pengguna & penguji):** situs Netlify (lihat langkah di bawah).
-- **Mesin di Cloudflare:** `https://peta-rantai-peristiwa.eddysaskara.workers.dev`.
-  Alamat `*.workers.dev` tidak bisa dibuka dari sebagian jaringan internet di Indonesia,
-  jadi Netlify dipakai sebagai pintu depan yang meneruskan `/api/*` ke Worker (`netlify.toml`).
+`https://peta-rantai-peristiwa.eddysaskara.workers.dev`
 
-## Pintu depan Netlify (sekali saja, ± 3 menit)
-
-1. Masuk ke **app.netlify.com** (boleh pakai akun GitHub).
-2. **Add new project → Import an existing project → GitHub**, pilih repo `peta-rantai-peristiwa`.
-3. Biarkan semua pengaturan apa adanya (dibaca dari `netlify.toml`), klik **Deploy**.
-4. Opsional: **Project configuration → Change project name** menjadi misalnya `peta-rantai-peristiwa`,
-   sehingga alamatnya `https://peta-rantai-peristiwa.netlify.app`.
+Alamat `*.workers.dev` tidak bisa dibuka dari sebagian jaringan internet di Indonesia. Dua jalan keluar,
+keduanya tetap di Cloudflare:
+- **Gratis:** aktifkan DNS Cloudflare di perangkat (Chrome: *Settings → Privacy and security → Security →
+  Use secure DNS → Cloudflare (1.1.1.1)*), atau pasang aplikasi **1.1.1.1 / WARP**.
+- **Paling andal untuk penguji:** domain sendiri dari Cloudflare Registrar, lalu
+  *Workers → peta-rantai-peristiwa → Settings → Domains & Routes → Add → Custom domain*.
 
 ## Deploy Cloudflare Worker (sekali saja, ± 5 menit)
 
@@ -47,7 +43,7 @@ GDELT + RSS  ──►  Workers AI  ──►  D1  ──►  Tinjau: setujui / 
    - Variable name: `ADMIN_PIN`
    - Value: PIN pilihan Anda (minimal 6 karakter, jangan dibagikan)
    Klik **Deploy**.
-5. Buka alamat Netlify, klik **Masuk sebagai pemilik**, masukkan PIN, lalu di **Tinjau** pilih
+5. Buka alamat aplikasi, klik **Masuk sebagai pemilik**, masukkan PIN, lalu di **Tinjau** pilih
    *7 hari terakhir* dan **Ambil berita sekarang**. Permintaan masuk antrean dan diproses Cloudflare
    paling lambat 5 menit kemudian (jadwal `*/5 * * * *`).
 
