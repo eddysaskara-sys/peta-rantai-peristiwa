@@ -1,0 +1,14 @@
+{
+  "name": "peta-rantai-peristiwa",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Peta kaitan sebab-akibat peristiwa global dan lokal, dengan Cloudflare Workers AI",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "test": "node test/harness.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.151.3"
+  }
+}

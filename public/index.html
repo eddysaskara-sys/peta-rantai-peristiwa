@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Peta Rantai Peristiwa</title>
+  <meta name="description" content="Kaitan sebab-akibat peristiwa global dan lokal, diperbarui otomatis setiap sore.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Public+Sans:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3v26' stroke='%23F0B44C' stroke-width='3'/%3E%3Ccircle cx='16' cy='8' r='5' fill='%23F0B44C'/%3E%3Ccircle cx='16' cy='24' r='5' fill='%235CC8B6'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Peta Rantai Peristiwa</h1>
+      <p class="tagline">Bagaimana kejadian di dunia merambat ke Indonesia, dan sebaliknya.</p>
+    </div>
+    <div class="top-side">
+      <p id="last-update" class="muted small"></p>
+      <button id="owner-btn" class="btn ghost small-btn" type="button">Masuk sebagai pemilik</button>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Bagian">
+    <button type="button" data-tab="tinjau" class="tab owner-only" hidden>Tinjau <span id="badge" class="badge" hidden></span></button>
+    <button type="button" data-tab="linimasa" class="tab">Linimasa</button>
+    <button type="button" data-tab="rantai" class="tab">Rantai</button>
+    <button type="button" data-tab="sektor" class="tab">Sektor</button>
+    <button type="button" data-tab="perkiraan" class="tab">Perkiraan</button>
+  </nav>
+
+  <main id="view" tabindex="-1"></main>
+
+  <aside id="drawer" class="drawer" hidden aria-modal="true" role="dialog" aria-labelledby="drawer-title">
+    <div class="drawer-panel">
+      <button type="button" class="btn ghost close" id="drawer-close" aria-label="Tutup">Tutup</button>
+      <div id="drawer-body"></div>
+    </div>
+  </aside>
+
+  <dialog id="pin-dialog">
+    <form method="dialog" id="pin-form">
+      <h2>Masuk sebagai pemilik</h2>
+      <p class="muted">Hanya pemilik yang bisa mengambil berita, menyetujui kaitan, dan mencatat perkiraan. Penguji cukup melihat.</p>
+      <label for="pin-input">PIN</label>
+      <input id="pin-input" type="password" inputmode="numeric" autocomplete="current-password" required>
+      <p id="pin-error" class="error" hidden></p>
+      <div class="row-end">
+        <button type="button" class="btn ghost" id="pin-cancel">Batal</button>
+        <button type="submit" class="btn primary">Masuk</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

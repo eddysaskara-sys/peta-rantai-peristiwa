@@ -1,0 +1,26 @@
+name = "peta-rantai-peristiwa"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Halaman web (index.html, app.js, style.css) disajikan dari folder public.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Workers AI: tidak perlu API key, memakai kuota gratis akun Cloudflare.
+[ai]
+binding = "AI"
+
+# Database peristiwa, kaitan, dan perkiraan.
+[[d1_databases]]
+binding = "DB"
+database_name = "peta-rantai-db"
+database_id = "4957dd25-676b-49cb-b4e8-21db098472f0"
+
+# Pembaruan otomatis setiap hari pukul 17.30 WIB (10.30 UTC),
+# supaya hasilnya siap ditinjau malam hari.
+[triggers]
+crons = ["30 10 * * *"]
+
+[observability]
+enabled = true
