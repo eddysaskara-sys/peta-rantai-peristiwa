@@ -85,8 +85,9 @@ export const INDIKATOR_INDONESIA = ['Rupiah', 'IHSG', 'BI Rate'];
 // Kode pengambilnya tetap ada; isi daftar ini untuk mengaktifkannya kembali.
 export const GDELT_QUERIES = [];
 
-// 12 feed pertama sudah dicek aktif pada 21 Okt 2026. Feed tambahan (23 Okt) diperiksa dari
-// Cloudflare lewat tombol "Cek sumber berita"; feed yang gagal hanya dicatat, tidak menghentikan proses.
+// 12 feed pertama sudah dicek aktif pada 21 Okt 2026. Feed tambahan diperiksa dari Cloudflare lewat
+// "Cek sumber berita" pada 23 Okt 2026: semuanya aktif (suara.com 404 dan mining.com 403 sudah dibuang).
+// Feed yang gagal hanya dicatat, tidak menghentikan proses.
 // "label" membedakan beberapa feed dari media yang sama di catatan pembaruan.
 export const RSS_FEEDS = [
   // Media Indonesia
@@ -102,7 +103,6 @@ export const RSS_FEEDS = [
   { url: 'https://www.antaranews.com/rss/ekonomi.xml', source: 'antaranews.com', label: 'Antara ekonomi', origin: 'lokal' },
   { url: 'https://www.cnnindonesia.com/internasional/rss', source: 'cnnindonesia.com', label: 'CNN Indonesia internasional', origin: 'lokal' },
   { url: 'https://rss.tempo.co/bisnis', source: 'tempo.co', origin: 'lokal' },
-  { url: 'https://www.suara.com/rss/bisnis', source: 'suara.com', origin: 'lokal' },
   // Media internasional
   { url: 'https://www.aljazeera.com/xml/rss/all.xml', source: 'aljazeera.com', origin: 'internasional' },
   { url: 'https://feeds.npr.org/1006/rss.xml', source: 'npr.org', origin: 'internasional' },
@@ -114,7 +114,6 @@ export const RSS_FEEDS = [
   { url: 'https://www.theguardian.com/business/rss', source: 'theguardian.com', origin: 'internasional' },
   { url: 'https://www.cnbc.com/id/20910258/device/rss/rss.html', source: 'cnbc.com', label: 'CNBC economy', origin: 'internasional' },
   { url: 'https://rss.dw.com/rdf/rss-en-bus', source: 'dw.com', origin: 'internasional' },
-  { url: 'https://www.mining.com/feed/', source: 'mining.com', origin: 'internasional' },
   { url: 'https://www.hellenicshippingnews.com/feed/', source: 'hellenicshippingnews.com', origin: 'internasional' },
   { url: 'https://www.federalreserve.gov/feeds/press_monetary.xml', source: 'federalreserve.gov', origin: 'internasional' },
 ];
