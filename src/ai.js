@@ -264,7 +264,8 @@ Aturan:
 ${JALUR}
 - "jenis": salah satu dari ${JENIS.join(', ')}.
 - "alasan": 1 kalimat yang menjelaskan mekanismenya, dalam Bahasa Indonesia.
-- "keyakinan": angka 0 sampai 1, jujur.
+- "keyakinan": angka 0 sampai 1, jujur. Kaitan langsung dengan mekanisme jelas 0,7 ke atas; kaitan tidak langsung atau yang butuh banyak langkah 0,3 sampai 0,5.
+- Sebarkan usulan ke banyak rantai; jangan menumpuk banyak penyebab ke satu peristiwa akibat yang sama.
 - Maksimal ${maks} kaitan, diurutkan dari yang paling kuat. Bila tidak ada yang masuk akal, kembalikan daftar kosong.
 Jawab HANYA dengan JSON tanpa teks lain, memakai kode peristiwa (mis. "E3", "E41"), dengan bentuk:
 {"kaitan":[{"dari":"E3","ke":"E41","jenis":"menyebabkan","alasan":"","keyakinan":0.6}]}`;

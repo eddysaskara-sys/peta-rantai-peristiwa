@@ -656,3 +656,7 @@ const sbRow = sq.prepare('SELECT * FROM runs WHERE id = ?').get(sc3.runId);
 ok(sbRow.status === 'selesai' && sbRow.n_events === 150, `pemindaian tetap jalan dengan > 100 peristiwa (${sbRow.status}: ${String(sbRow.note).split('\n').pop()})`);
 [s, d] = await call('GET', '/api/chain/' + banyak[0] + '?depth=1');
 ok(s === 200 && d.down[0].length === banyak.length - 1, `rantai dengan > 100 peristiwa terhubung tetap terbuka (${d.down?.[0]?.length})`);
+
+const hub = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, tanggal: '2026-10-0' + (i + 1) }));
+const nsHub = normalizeScan({ kaitan: [1, 2, 3, 4, 5].map((i) => ({ dari: 'E' + i, ke: 'E6', jenis: 'menyebabkan', alasan: 'x', keyakinan: 0.7 })) }, hub);
+ok(nsHub.length === 3 && nsHub.map((l) => l.dari).join() === '100,101,102', 'pemindaian: maks. 3 usulan baru per peristiwa akibat, urutan AI dipertahankan');

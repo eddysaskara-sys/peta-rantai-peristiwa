@@ -84,6 +84,7 @@ export const SKOR_MAKS = 4;
 export const KAITAN_HARI = 60; // peristiwa yang ikut dipindai dan dibandingkan
 export const KAITAN_MAKS_PERISTIWA = 150; // batas peristiwa per pemindaian (ukuran prompt)
 export const KAITAN_MAKS = 20; // usulan baru per pemindaian
+export const KAITAN_PER_AKIBAT = 3; // maks. usulan baru yang menuju satu peristiwa akibat per pemindaian
 export const LINK_LAMA_MAKS = 100; // peristiwa lama yang ditawarkan saat mengaitkan peristiwa baru
 // Indikator yang menandakan rantai sudah sampai ke Indonesia.
 export const INDIKATOR_INDONESIA = ['Rupiah', 'IHSG', 'BI Rate'];

@@ -18,6 +18,7 @@ import {
   KAITAN_HARI,
   KAITAN_MAKS_PERISTIWA,
   KAITAN_MAKS,
+  KAITAN_PER_AKIBAT,
   LINK_LAMA_MAKS,
 } from './constants.js';
 import { wibDate, wibDateDaysAgo, nowIso, parseList, matchLabels, addDays, wibDayStartIso } from './util.js';
@@ -469,7 +470,9 @@ export function normalizeScan(out, events, existing = new Set(), maks = KAITAN_M
     return m ? events[Number(m[1]) - 1] || null : null;
   };
   const seen = new Set();
+  const perAkibat = new Map();
   const links = [];
+  // AI diminta mengurutkan dari yang terkuat; urutan itu yang dipertahankan.
   for (const k of list) {
     if (links.length >= maks) break;
     const a = resolve(k.dari);
@@ -478,6 +481,9 @@ export function normalizeScan(out, events, existing = new Set(), maks = KAITAN_M
     if (a.tanggal > b.tanggal) continue;
     const key = `${a.id}-${b.id}`;
     if (existing.has(key) || seen.has(key) || seen.has(`${b.id}-${a.id}`)) continue;
+    // Satu peristiwa akibat tidak dibanjiri usulan dari banyak penyebab yang lemah.
+    if ((perAkibat.get(b.id) || 0) >= KAITAN_PER_AKIBAT) continue;
+    perAkibat.set(b.id, (perAkibat.get(b.id) || 0) + 1);
     seen.add(key);
     links.push({
       dari: a.id,
