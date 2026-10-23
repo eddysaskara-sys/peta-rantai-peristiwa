@@ -3,8 +3,8 @@
 | Bagian | Isi |
 |---|---|
 | **Masalah** | Berita global dan lokal tersebar di banyak sumber dan lewat begitu saja karena kesibukan kerja. Rantai sebab-akibatnya (mis. konflik Laut Merah → harga minyak → inflasi → harga lokal) tidak pernah tercatat, sehingga tidak bisa dipakai untuk keputusan investasi, tulisan, atau diskusi. |
-| **Pemakai** | **Pemilik:** meninjau di malam hari, maksimal 5 menit. **Penguji:** teman investor dan teman kuliah Magister Manajemen, hanya melihat. |
-| **Rangkuman 1 kalimat** | App ini adalah **peta rantai peristiwa** untuk **pemilik (dan teman yang hanya melihat)** yang **setiap malam menyajikan 5 kaitan sebab-akibat global–lokal terpenting, mengikuti sektor yang sedang bergerak di pasar, untuk ditinjau dalam 5 menit.** |
+| **Pemakai** | **Pemilik:** meninjau di malam hari, maksimal 5 menit. **Teman pengamat global:** hanya melihat. |
+| **Rangkuman 1 kalimat** | App ini adalah **peta rantai peristiwa** untuk **pemilik (dan teman pengamat global yang hanya melihat)** yang **setiap malam menyajikan 5 kaitan sebab-akibat global–lokal terpenting, mengikuti sektor yang sedang bergerak di pasar, untuk ditinjau dalam 5 menit.** |
 
 ## Fitur inti (5)
 1. **Pengambilan berita otomatis** setiap hari pukul 17.30 WIB dari media besar nasional dan internasional. Setiap peristiwa menautkan sumbernya.
