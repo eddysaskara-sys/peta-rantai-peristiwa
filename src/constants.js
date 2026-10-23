@@ -45,6 +45,41 @@ export const INDIKATOR = [
 
 export const JENIS = ['menyebabkan', 'memperkuat', 'meredam', 'memicu respons'];
 
+// ---------- 6 kelompok sektor (BRIEF final, 23 Okt 2026) ----------
+// Label sektor rinci tetap disimpan di peristiwa; kelompok diturunkan darinya.
+// "harga": kode seri harga yang dipakai untuk mengukur pergerakan pasar kelompok itu.
+//          null = kelompok dinilai dari lonjakan berita.
+export const KELOMPOK = [
+  { id: 'pangan', nama: 'Pangan & Agribisnis', sektor: ['Pertanian', 'Perkebunan', 'Peternakan', 'Perikanan', 'Pangan'], harga: null,
+    catatan: 'API harian Panel Harga Badan Pangan Nasional tidak terbuka untuk publik, jadi dinilai dari lonjakan berita.' },
+  { id: 'energi', nama: 'Energi', sektor: ['Energi', 'Minyak & Gas'], harga: 'BRENT' },
+  { id: 'tambang', nama: 'Tambang & Mineral', sektor: ['Mineral & Pertambangan'], harga: 'XAU' },
+  { id: 'industri', nama: 'Industri & Konsumsi', sektor: ['Tekstil & Pakaian', 'Manufaktur & Industri', 'Properti & Konstruksi', 'Teknologi & Digital', 'Pariwisata', 'Kesehatan', 'Ketenagakerjaan'], harga: null },
+  { id: 'keuangan', nama: 'Keuangan & Moneter', sektor: ['Keuangan & Perbankan', 'Moneter', 'Fiskal & Kebijakan'], harga: 'USDIDR' },
+  { id: 'dagang', nama: 'Perdagangan & Logistik', sektor: ['Perdagangan & Logistik', 'Transportasi'], harga: null },
+];
+// Label yang menjadi pemicu lintas sektor, tidak masuk kelompok mana pun.
+export const LINTAS_SEKTOR = ['Geopolitik & Keamanan', 'Iklim & Bencana'];
+
+// Seri harga. "prior" = besar gerak harian yang lazim (%), dipakai sebagai pembanding
+// sementara selama riwayat harga yang tersimpan belum mencapai MIN_RIWAYAT hari.
+export const SERI_HARGA = {
+  BRENT: { nama: 'Brent', sumber: 'API Ninjas', prior: 2.0 },
+  XAU: { nama: 'Emas', sumber: 'gold-api.com', prior: 1.0 },
+  USDIDR: { nama: 'USD/IDR', sumber: 'Frankfurter (kurs acuan ECB)', prior: 0.4 },
+};
+export const MIN_RIWAYAT = 10; // jumlah perubahan harian minimum untuk pembanding 30 hari
+export const Z_BERGERAK = 1.5; // gerak hari ini >= 1,5x gerak biasanya = "tidak biasa"
+export const HARGA_BASI_HARI = 4; // data harga lebih tua dari ini dianggap tidak tersedia
+export const BERITA_MIN = 2; // lonjakan berita: minimal 2 peristiwa di kelompok itu
+export const BERITA_RASIO = 2; // dan porsinya >= 2x rata-rata 7 hari sebelumnya
+
+// ---------- Prioritas tinjauan ----------
+export const MAKS_TINJAU = 5; // usulan kaitan per malam
+export const HARI_KOLAM = 30; // usulan yang peristiwanya lebih tua dari ini sudah tergeser
+// Indikator yang menandakan rantai sudah sampai ke Indonesia.
+export const INDIKATOR_INDONESIA = ['Rupiah', 'IHSG', 'BI Rate'];
+
 // GDELT dinonaktifkan: dalam uji 21 Okt 2026 semua kueri dari Cloudflare ditolak
 // ("limit requests to one every 5 seconds") karena alamat IP Cloudflare dipakai bersama.
 // Kode pengambilnya tetap ada; isi daftar ini untuk mengaktifkannya kembali.

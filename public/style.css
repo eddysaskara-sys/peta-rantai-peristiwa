@@ -282,3 +282,47 @@ dialog input { width: 100%; }
   .stop { animation: arrive 0.35s ease-out both; }
   @keyframes arrive { from { opacity: 0; transform: translateY(6px); } }
 }
+
+/* ---------- BRIEF final: kelompok, prioritas, rantai utama ---------- */
+.chip.kel { color: var(--text); border-color: var(--muted); }
+.chip.sisi { color: var(--text); border-style: dashed; }
+.plainbtn { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+
+.banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; background: var(--surface-2); border: 1px solid var(--global); border-radius: var(--radius-m); padding: 12px 14px; margin-bottom: 20px; }
+.banner.calm { border-color: var(--line); }
+
+.fchips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+.fchip { background: transparent; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font: 600 0.85rem var(--body); padding: 6px 12px; cursor: pointer; }
+.fchip[aria-pressed='true'] { background: var(--surface-2); color: var(--text); border-color: var(--text); }
+
+.chains { display: grid; gap: 10px; }
+.chain { display: block; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 14px; color: var(--text); font: inherit; cursor: pointer; }
+.chain:hover { border-color: var(--muted); }
+.chain-steps { list-style: none; margin: 0 0 8px; padding: 0 0 0 18px; position: relative; }
+.chain-steps::before { content: ''; position: absolute; left: 5px; top: 8px; bottom: 8px; width: 2px; background: linear-gradient(var(--global), var(--lokal)); border-radius: 2px; }
+.chain-steps li { position: relative; padding: 2px 0 6px; }
+.chain-steps li::before { content: ''; position: absolute; left: -17px; top: 8px; width: 10px; height: 10px; border-radius: 50%; background: var(--lokal); border: 2px solid var(--surface); }
+.chain-steps li.global::before { background: var(--global); }
+.chain-steps li.more { color: var(--muted); font-size: 0.85rem; }
+.chain-steps li.more::before { background: var(--line); }
+.chain-steps .t { font-weight: 600; display: block; }
+.chain-steps .jenis { display: block; font-size: 0.78rem; color: var(--muted); }
+
+.prio { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.prio-score { font: 700 0.8rem var(--body); padding: 2px 8px; border-radius: 999px; background: var(--global); color: #10203a; }
+.why { margin: 8px 0 0; padding-left: 18px; font-size: 0.88rem; }
+.why li { margin-bottom: 2px; }
+.why-none { margin-top: 8px; }
+
+.pulse-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.pulse-list li { display: grid; grid-template-columns: minmax(130px, auto) 1fr auto; gap: 10px; align-items: baseline; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 8px 10px; font-size: 0.9rem; }
+.pulse-list li.hot { border-color: var(--global); }
+.pulse-list .metode { font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+.pulse-calm { margin-top: 8px; }
+.pulse-calm summary { cursor: pointer; color: var(--muted); font-size: 0.88rem; margin-bottom: 8px; }
+@media (max-width: 560px) {
+  .pulse-list li { grid-template-columns: 1fr; gap: 2px; }
+}
+
+.sector-table tr.hot td:first-child button { color: var(--global); }
+.sisi-block { border-left: 3px dashed var(--line); padding-left: 10px; }

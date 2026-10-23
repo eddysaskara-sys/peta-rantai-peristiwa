@@ -1,8 +1,10 @@
 import { runPipeline, enqueueRun, processQueue } from './pipeline.js';
+import { SEKTOR, INDIKATOR, JENIS, AI_DAILY_LIMIT, KELOMPOK, LINTAS_SEKTOR, MAKS_TINJAU } from './constants.js';
+import { json, parseList, safeEqual, wibDate, wibDateDaysAgo, addDays, nowIso, kelompokOf } from './util.js';
+import { computeSignals } from './market.js';
+import { reviewQueue, decidedToday, poolCount } from './priority.js';
 
 const DAILY_CRON = '30 10 * * *';
-import { SEKTOR, INDIKATOR, JENIS, AI_DAILY_LIMIT } from './constants.js';
-import { json, parseList, safeEqual, wibDate, wibDateDaysAgo, addDays, nowIso } from './util.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -43,13 +45,15 @@ async function body(request) {
 }
 
 function eventOut(r) {
+  const sektor = parseList(r.sektor);
   return {
     id: r.id,
     tanggal: r.tanggal,
     judul: r.judul,
     ringkasan: r.ringkasan,
     tingkat: r.tingkat,
-    sektor: parseList(r.sektor),
+    sektor,
+    kelompok: kelompokOf(sektor),
     indikator: parseList(r.indikator),
     dua_sisi: r.dua_sisi || '',
     dampak: parseList(r.dampak),
@@ -82,17 +86,32 @@ async function route(request, env) {
       )
       .bind(wibDate(), wibDate())
       .first();
+    const signals = await computeSignals(db);
+    let tinjau = null;
+    if (owner) {
+      const sudah = await decidedToday(db);
+      const kolam = await poolCount(db);
+      tinjau = { maks: MAKS_TINJAU, sudah, sisa: Math.min(Math.max(0, MAKS_TINJAU - sudah), kolam), kolam };
+    }
     return json({
       owner,
       pinSet: Boolean(env.ADMIN_PIN),
       today: wibDate(),
       lastRun,
       counts: c,
+      tinjau,
       aiLimit: AI_DAILY_LIMIT,
       sektor: SEKTOR,
+      kelompok: KELOMPOK.map(({ id, nama, sektor, harga, catatan }) => ({ id, nama, sektor, harga, catatan: catatan || '' })),
+      lintas: LINTAS_SEKTOR,
+      signals,
       indikator: INDIKATOR,
       jenis: JENIS,
     });
+  }
+
+  if (path === '/api/market' && method === 'GET') {
+    return json({ today: wibDate(), signals: await computeSignals(db) });
   }
 
   if (path === '/api/login' && method === 'POST') {
@@ -117,6 +136,11 @@ async function route(request, env) {
     if (sektor && SEKTOR.includes(sektor)) {
       where.push('e.sektor LIKE ?');
       params.push(`%"${sektor}"%`);
+    }
+    const kel = KELOMPOK.find((k) => k.id === url.searchParams.get('kelompok'));
+    if (kel) {
+      where.push('(' + kel.sektor.map(() => 'e.sektor LIKE ?').join(' OR ') + ')');
+      params.push(...kel.sektor.map((s) => `%"${s}"%`));
     }
     const indikator = url.searchParams.get('indikator');
     if (indikator && INDIKATOR.includes(indikator)) {
@@ -206,35 +230,21 @@ async function route(request, env) {
   if (path === '/api/review' && method === 'GET') {
     const deny = requireOwner(request, env);
     if (deny) return deny;
-    const pending = await db
-      .prepare(
-        `SELECT l.*, d.judul AS dari_judul, d.tingkat AS dari_tingkat, d.tanggal AS dari_tanggal, d.sektor AS dari_sektor,
-                k.judul AS ke_judul, k.tingkat AS ke_tingkat, k.tanggal AS ke_tanggal, k.sektor AS ke_sektor
-         FROM links l JOIN events d ON d.id = l.dari_id JOIN events k ON k.id = l.ke_id
-         WHERE l.status = 'usulan' AND d.status = 'aktif' AND k.status = 'aktif'
-         ORDER BY l.keyakinan DESC LIMIT 60`
-      )
-      .all();
-    const lastRun = await db.prepare("SELECT * FROM runs ORDER BY id DESC LIMIT 1").first();
-    const lastOk = await db.prepare("SELECT id FROM runs WHERE n_events > 0 ORDER BY id DESC LIMIT 1").first();
+    const q = await reviewQueue(db);
+    const lastRun = await db.prepare('SELECT * FROM runs ORDER BY id DESC LIMIT 1').first();
+    const lastOk = await db.prepare('SELECT id FROM runs WHERE n_events > 0 ORDER BY id DESC LIMIT 1').first();
     let fresh = [];
     if (lastOk) {
       const rows = await db
         .prepare(
           `SELECT e.*, (SELECT COUNT(*) FROM event_articles ea WHERE ea.event_id=e.id) AS n_sumber
-           FROM events e WHERE e.run_id = ? ORDER BY e.id`
+           FROM events e WHERE e.run_id = ? AND e.status = 'aktif' ORDER BY e.id`
         )
         .bind(lastOk.id)
         .all();
       fresh = rows.results.map(eventOut);
     }
-    const runs = await db.prepare('SELECT * FROM runs ORDER BY id DESC LIMIT 8').all();
-    return json({
-      pending: pending.results.map((r) => ({ ...r, dari_sektor: parseList(r.dari_sektor), ke_sektor: parseList(r.ke_sektor) })),
-      lastRun,
-      fresh,
-      runs: runs.results,
-    });
+    return json({ ...q, lastRun, fresh });
   }
 
   if (path === '/api/run' && method === 'POST') {
@@ -252,7 +262,11 @@ async function route(request, env) {
     if (deny) return deny;
     const b = await body(request);
     if (!['disetujui', 'ditolak', 'usulan'].includes(b.status)) return json({ error: 'Status tidak dikenal.' }, 400);
-    await db.prepare('UPDATE links SET status = ? WHERE id = ?').bind(b.status, Number(m[1])).run();
+    // decided_at dipakai untuk batas MAKS_TINJAU keputusan per malam; mengembalikan ke usulan membebaskan slotnya.
+    await db
+      .prepare('UPDATE links SET status = ?, decided_at = ? WHERE id = ?')
+      .bind(b.status, b.status === 'usulan' ? null : nowIso(), Number(m[1]))
+      .run();
     return json({ ok: true });
   }
 
@@ -273,24 +287,65 @@ async function route(request, env) {
     return json({ ok: true });
   }
 
-  // ---------- Sektor ----------
+  // ---------- Rantai yang sudah disetujui (layar utama) ----------
+  if (path === '/api/chains' && method === 'GET') {
+    const days = Math.max(1, Math.min(365, Number(url.searchParams.get('days')) || 90));
+    const kel = url.searchParams.get('kelompok') || '';
+    const links = (
+      await db
+        .prepare(
+          `SELECT l.id, l.dari_id, l.ke_id, l.jenis, l.alasan FROM links l
+           JOIN events d ON d.id = l.dari_id JOIN events k ON k.id = l.ke_id
+           WHERE l.status = 'disetujui' AND d.status = 'aktif' AND k.status = 'aktif'`
+        )
+        .all()
+    ).results;
+    const ids = [...new Set(links.flatMap((l) => [l.dari_id, l.ke_id]))];
+    const evMap = new Map();
+    for (let i = 0; i < ids.length; i += 90) {
+      const chunk = ids.slice(i, i + 90);
+      const rows = await db.prepare(`SELECT * FROM events WHERE id IN (${chunk.map(() => '?').join(',')})`).bind(...chunk).all();
+      rows.results.forEach((r) => evMap.set(r.id, eventOut(r)));
+    }
+    const chains = buildChains(links, evMap)
+      .filter((c) => c.terbaru >= wibDateDaysAgo(days))
+      .filter((c) => !kel || c.kelompok.includes(kel));
+    return json({ days, kelompok: kel, chains: chains.slice(0, 30), total: chains.length });
+  }
+
+  // ---------- Sektor (6 kelompok) ----------
   if (path === '/api/sectors' && method === 'GET') {
     const days = Math.max(1, Math.min(365, Number(url.searchParams.get('days')) || 30));
     const rows = await db
       .prepare("SELECT id, tanggal, judul, tingkat, sektor FROM events WHERE status='aktif' AND tanggal >= ? ORDER BY tanggal DESC, id DESC")
       .bind(wibDateDaysAgo(days))
       .all();
-    const stats = SEKTOR.map((s) => ({ sektor: s, global: 0, lokal: 0, terbaru: null }));
-    const byName = new Map(stats.map((s) => [s.sektor, s]));
+    const signals = await computeSignals(db);
+    const sig = new Map(signals.map((x) => [x.id, x]));
+    const stats = KELOMPOK.map((k) => ({
+      id: k.id,
+      nama: k.nama,
+      catatan: k.catatan || '',
+      global: 0,
+      lokal: 0,
+      rinci: Object.fromEntries(k.sektor.map((s) => [s, 0])),
+      terbaru: null,
+      signal: sig.get(k.id),
+    }));
+    const byId = new Map(stats.map((s) => [s.id, s]));
+    let lintas = 0;
     for (const r of rows.results) {
-      for (const s of parseList(r.sektor)) {
-        const st = byName.get(s);
-        if (!st) continue;
+      const sektor = parseList(r.sektor);
+      const kel = kelompokOf(sektor);
+      if (!kel.length) lintas++;
+      for (const id of kel) {
+        const st = byId.get(id);
         st[r.tingkat === 'global' ? 'global' : 'lokal']++;
+        for (const s of sektor) if (s in st.rinci) st.rinci[s]++;
         if (!st.terbaru) st.terbaru = { id: r.id, judul: r.judul, tanggal: r.tanggal };
       }
     }
-    return json({ days, sectors: stats });
+    return json({ days, kelompok: stats, lintas });
   }
 
   // ---------- Perkiraan ----------
@@ -333,6 +388,82 @@ async function route(request, env) {
   }
 
   return json({ error: 'Alamat API tidak dikenal.' }, 404);
+}
+
+/**
+ * Kelompokkan kaitan yang disetujui menjadi rantai (komponen terhubung).
+ * Setiap rantai: akar (penyebab paling awal), jalur terpanjang dari akar untuk ringkasan,
+ * kelompok sektor yang tersentuh, dan tanggal peristiwa terbaru.
+ */
+export function buildChains(links, evMap) {
+  const parent = new Map();
+  const find = (x) => {
+    while (parent.get(x) !== x) {
+      parent.set(x, parent.get(parent.get(x)));
+      x = parent.get(x);
+    }
+    return x;
+  };
+  for (const l of links) {
+    for (const id of [l.dari_id, l.ke_id]) if (!parent.has(id)) parent.set(id, id);
+    const a = find(l.dari_id);
+    const b = find(l.ke_id);
+    if (a !== b) parent.set(a, b);
+  }
+  const comps = new Map();
+  for (const id of parent.keys()) {
+    const r = find(id);
+    if (!comps.has(r)) comps.set(r, []);
+    comps.get(r).push(id);
+  }
+  const out = [];
+  for (const nodes of comps.values()) {
+    const set = new Set(nodes);
+    const edges = links.filter((l) => set.has(l.dari_id));
+    const hasIn = new Set(edges.map((l) => l.ke_id));
+    const byDate = (a, b) => (evMap.get(a)?.tanggal || '').localeCompare(evMap.get(b)?.tanggal || '') || a - b;
+    const roots = nodes.filter((n) => !hasIn.has(n)).sort(byDate);
+    // Jalur terpanjang dari sebuah akar (DFS dengan penjaga siklus).
+    const memo = new Map();
+    const longest = (id, seen) => {
+      if (memo.has(id)) return memo.get(id);
+      let best = [];
+      for (const l of edges) {
+        if (l.dari_id !== id || seen.has(l.ke_id)) continue;
+        seen.add(l.ke_id);
+        const tail = longest(l.ke_id, seen);
+        seen.delete(l.ke_id);
+        if (tail.length + 1 > best.length) best = [{ link: l, ke: l.ke_id }, ...tail];
+      }
+      memo.set(id, best);
+      return best;
+    };
+    // Akar = penyebab tanpa pendahulu yang jalurnya paling panjang; seri -> yang paling awal.
+    let akar = roots[0] ?? [...nodes].sort(byDate)[0];
+    let path = longest(akar, new Set([akar]));
+    for (const r of roots.slice(1)) {
+      const p = longest(r, new Set([r]));
+      if (p.length > path.length) {
+        akar = r;
+        path = p;
+      }
+    }
+    const evs = nodes.map((n) => evMap.get(n)).filter(Boolean);
+    if (!evs.length) continue;
+    const jalur = [{ event: evMap.get(akar), link: null }].concat(
+      path.map((p) => ({ event: evMap.get(p.ke), link: { jenis: p.link.jenis, alasan: p.link.alasan } }))
+    );
+    out.push({
+      akar,
+      jalur,
+      n_peristiwa: evs.length,
+      n_kaitan: edges.length,
+      kelompok: KELOMPOK.map((k) => k.id).filter((id) => evs.some((e) => e.kelompok.includes(id))),
+      dua_sisi: evs.some((e) => e.dua_sisi),
+      terbaru: evs.map((e) => e.tanggal).sort().pop(),
+    });
+  }
+  return out.sort((a, b) => b.terbaru.localeCompare(a.terbaru) || b.n_peristiwa - a.n_peristiwa);
 }
 
 /** Telusuri kaitan ke atas (penyebab) atau ke bawah (akibat), per tingkat. */

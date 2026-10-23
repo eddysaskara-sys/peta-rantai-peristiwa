@@ -10,15 +10,24 @@ Final project Mini Bootcamp *Claude for Non-Tech Professional* (MBCL Cohort 3).
 ## Cara kerja
 
 ```
-17.30 WIB (otomatis)                     Malam (pemilik, ≤ 5 menit)
-RSS 12 feed  ──►  Workers AI  ──►  D1  ──►  Tinjau: setujui / tolak kaitan
-(lokal & intl)   (peristiwa +           ──►  Rantai, Linimasa, Sektor, Perkiraan
-                  usulan kaitan)              (terbuka untuk penguji, baca saja)
+17.30 WIB (otomatis)                              Malam (pemilik, ≤ 5 menit)
+Harga pasar (kurs, emas, Brent) ─┐
+RSS 12 feed ──► Workers AI ──────┴─► D1 ──► Tinjau: maks 5 usulan per malam,
+(lokal & intl)  (peristiwa +                 diurutkan skor prioritas (0–3)
+                 usulan kaitan)       ──► Rantai (layar utama), Linimasa, Sektor, Perkiraan
+                                          (terbuka untuk penguji, baca saja)
 ```
+
+Spesifikasi lengkap ada di `BRIEF.md`. Ringkasnya:
+- **Prioritas tinjauan** (1 poin per kriteria): berdampak ke Indonesia, menyambung rantai lama,
+  dan sektor yang sedang bergerak tidak biasa. Maksimal 5 keputusan per malam; sisanya bersaing lagi besok.
+- **6 kelompok sektor**. Pergerakan diukur hibrida: kurs USD/IDR (Frankfurter), emas (gold-api.com),
+  Brent (API Ninjas), dan lonjakan berita untuk kelompok tanpa data harga. Gerak harga dibanding
+  kebiasaan geraknya sendiri (30 hari); data harga tidak ditampilkan sebagai grafik.
 
 - **Sumber berita:** RSS dari 7 media Indonesia (CNBC Indonesia, CNN Indonesia, Detik, Liputan6, Republika, Okezone, Antara) dan 4 media internasional (Al Jazeera, NPR, OilPrice, Investing.com). GDELT sempat dipakai tetapi ditolak dari jaringan Cloudflare, sehingga dinonaktifkan.
 - **AI:** Cloudflare Workers AI, model utama `@cf/openai/gpt-oss-120b` dengan cadangan `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, dibatasi 40 panggilan per hari agar tetap dalam kuota gratis.
-- **Data:** Cloudflare D1 `peta-rantai-db` (skema di `schema.sql`, sudah dibuat).
+- **Data:** Cloudflare D1 `peta-rantai-db` (skema di `schema.sql`, sudah dibuat; perubahan skema di folder `migrations/`).
 
 ## Alamat aplikasi
 
@@ -43,6 +52,8 @@ keduanya tetap di Cloudflare:
    - Variable name: `ADMIN_PIN`
    - Value: PIN pilihan Anda (minimal 6 karakter, jangan dibagikan)
    Klik **Deploy**.
+   Opsional, untuk harga Brent (kelompok Energi): daftar gratis di api-ninjas.com, lalu tambahkan
+   secret `API_NINJAS_KEY` dengan cara yang sama. Tanpa key ini, Energi dinilai dari lonjakan berita.
 5. Buka alamat aplikasi, klik **Masuk sebagai pemilik**, masukkan PIN, lalu di **Tinjau** pilih
    *7 hari terakhir* dan **Ambil berita sekarang**. Permintaan masuk antrean dan diproses Cloudflare
    paling lambat 5 menit kemudian (jadwal `*/5 * * * *`).

@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const worker = (await import(ROOT + '/src/index.js')).default;
 const { cleanTitle } = await import(ROOT + '/src/sources.js');
+const { priceSignal, newsSignals } = await import(ROOT + '/src/market.js');
+const { rankProposals } = await import(ROOT + '/src/priority.js');
 
 // ---- D1 tiruan ----
 const sq = new DatabaseSync(':memory:');
@@ -54,8 +56,23 @@ const AI = {
 let round = 0;
 const now = Date.now();
 const gd = (t, i, country) => ({ url: `https://contoh.id/${round}/${t.length}/${i}`, title: t, seendate: new Date(now - i * 3600e3).toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z', domain: 'contoh.id', sourcecountry: country });
-globalThis.fetch = async (url) => {
+// Harga: USD/IDR 45 hari kerja bergerak kecil, lalu hari terakhir melonjak 1,5% (gerak tidak biasa).
+const fxRates = {};
+{
+  let v = 17000, d = new Date(Date.now() - 70 * 86400e3);
+  const days = [];
+  while (days.length < 46) { d = new Date(d.getTime() + 86400e3); if (d.getUTCDay() % 6) days.push(d.toISOString().slice(0, 10)); }
+  days.forEach((day, i) => { v = i === days.length - 1 ? v * 1.015 : v * (1 + (i % 2 ? 0.002 : -0.0018)); fxRates[day] = { IDR: Math.round(v) }; });
+}
+let marketDown = false;
+globalThis.fetch = async (url, opts = {}) => {
   url = String(url);
+  if (url.includes('frankfurter')) return marketDown ? new Response('err', { status: 503 }) : new Response(JSON.stringify({ base: 'USD', rates: fxRates }));
+  if (url.includes('gold-api')) return new Response(JSON.stringify({ name: 'Gold', price: 4069.8, symbol: 'XAU', updatedAt: new Date().toISOString() }));
+  if (url.includes('api-ninjas')) {
+    if ((opts.headers || {})['X-Api-Key'] !== 'kunci-uji') return new Response('{"error":"Invalid API Key."}', { status: 400 });
+    return new Response(JSON.stringify({ price: 80, previous_close: 76, updated: Math.floor(Date.now() / 1000), type: 'brent' }));
+  }
   if (url.includes('gdeltproject')) {
     if (url.includes('drought')) return new Response('Please limit requests to one every 5 seconds', { status: 429 });
     const loc = url.includes('sourcecountry%3Aindonesia');
@@ -71,7 +88,7 @@ globalThis.fetch = async (url) => {
   return new Response('<rss><channel></channel></rss>');
 };
 
-const env = { DB, AI, ADMIN_PIN: 'rahasia123', ASSETS: { fetch: async () => new Response('<html>aset</html>') } };
+const env = { DB, AI, ADMIN_PIN: 'rahasia123', API_NINJAS_KEY: 'kunci-uji', ASSETS: { fetch: async () => new Response('<html>aset</html>') } };
 const call = async (method, path, body, pin) => {
   const r = await worker.fetch(new Request('https://x.dev' + path, { method, headers: pin ? { 'x-pin': pin } : {}, body: body ? JSON.stringify(body) : undefined }), env, { waitUntil() {} });
   const t = await r.text();
@@ -135,8 +152,88 @@ ok(d.events.length === 1 && d.events[0].judul.startsWith('BI'), 'filter sektor')
 [s, d] = await call('GET', '/api/events?days=30&tingkat=global&q=Hormuz');
 ok(d.events.length === 1 && d.events[0].n_kaitan === 1, 'filter tingkat + cari + hitung kaitan');
 [s, d] = await call('GET', '/api/sectors');
-const mg = d.sectors.find((x) => x.sektor === 'Minyak & Gas');
-ok(mg.global === 1 && mg.terbaru, 'statistik sektor');
+const en = d.kelompok.find((x) => x.id === 'energi');
+ok(d.kelompok.length === 6 && en.global === 1 && en.rinci['Minyak & Gas'] === 1 && en.terbaru, 'statistik 6 kelompok sektor, rincian sektor tetap ada');
+[s, d] = await call('GET', '/api/events?days=30&kelompok=energi');
+ok(d.events.length === 1 && d.events[0].kelompok.includes('energi'), 'filter kelompok sektor');
+
+// ---- Harga pasar & sinyal ----
+const mp = sq.prepare('SELECT kode, COUNT(*) AS n FROM market_prices GROUP BY kode').all();
+const nOf = (k) => mp.find((r) => r.kode === k)?.n || 0;
+ok(nOf('USDIDR') >= 40 && nOf('XAU') === 1 && nOf('BRENT') === 2, 'harga tersimpan: kurs dengan riwayat, emas 1 titik, Brent + penutupan sebelumnya');
+const run1note = sq.prepare('SELECT note FROM runs WHERE id = 1').get().note;
+ok(/Harga pasar: Brent: 2 data, Emas: 1 data, USD\/IDR: \d+ data/.test(run1note), 'catatan pembaruan memuat hasil harga pasar');
+[s, d] = await call('GET', '/api/market');
+const sig = Object.fromEntries(d.signals.map((x) => [x.id, x]));
+console.log('  sinyal:', d.signals.map((x) => `${x.id}=${x.metode}/${x.bergerak ? 'GERAK' : '-'}`).join(' '));
+ok(sig.keuangan.metode === 'harga' && sig.keuangan.bergerak && /rupiah melemah/.test(sig.keuangan.label), 'kurs melonjak 1,5% terbaca sebagai gerak tidak biasa');
+ok(sig.energi.metode === 'harga' && sig.energi.bergerak && /pembanding sementara/.test(sig.energi.label), 'Brent +5,3% dengan pembanding sementara');
+ok(sig.tambang.metode !== 'harga' && /Emas: riwayat harga belum cukup/.test(sig.tambang.label), 'emas 1 titik: jatuh ke berita dan dijelaskan');
+ok(sig.pangan.metode !== 'harga', 'pangan dinilai dari berita');
+
+// unit: priceSignal
+const flat = Array.from({ length: 31 }, (_, i) => ({ day: `2026-09-${String(i + 1).padStart(2, '0')}`.replace('2026-09-31', '2026-10-01'), nilai: 100 * (1 + (i % 2 ? 0.01 : -0.01)) }));
+const today0 = flat[flat.length - 1].day;
+let ps = priceSignal(flat, 2, today0);
+ok(ps.ok && !ps.sementara && !ps.bergerak, 'priceSignal: gerak biasa tidak ditandai');
+ps = priceSignal([...flat, { day: '2026-10-02', nilai: flat[30].nilai * 1.08 }], 2, '2026-10-02');
+ok(ps.ok && ps.bergerak && ps.z > 1.5, 'priceSignal: lonjakan 8% ditandai');
+ps = priceSignal(flat, 2, '2026-10-20');
+ok(!ps.ok && /data terakhir/.test(ps.alasan), 'priceSignal: data basi tidak dipakai');
+
+// unit: newsSignals berbasis porsi (hari backfill 35 peristiwa tidak dianggap lonjakan)
+const nrows = [];
+const add = (hari, n, kel) => { for (let i = 0; i < n; i++) nrows.push({ hari, kelompok: kel }); };
+add('2026-10-20', 30, ['keuangan']); add('2026-10-20', 5, ['energi']);
+add('2026-10-21', 9, ['keuangan']); add('2026-10-21', 1, ['dagang']);
+add('2026-10-22', 5, ['keuangan']); add('2026-10-22', 4, ['dagang']);
+const ns = newsSignals(nrows);
+ok(ns.dagang.bergerak && !ns.keuangan.bergerak && !ns.energi.bergerak, 'newsSignals: lonjakan porsi perdagangan terdeteksi, keuangan tidak');
+ok(!newsSignals(nrows.filter((r) => r.hari === '2026-10-22')).dagang.ok, 'newsSignals: riwayat kurang dari 3 hari = belum cukup');
+
+// unit: urutan prioritas
+const base = { dari_tingkat: 'global', dari_sektor: [], ke_sektor: [], dari_indikator: [], ke_indikator: [], keyakinan: 0.5, created_at: '2026-10-22' };
+const ranked = rankProposals([
+  { ...base, id: 1, dari_id: 1, ke_id: 2, ke_tingkat: 'global', keyakinan: 0.9 },
+  { ...base, id: 2, dari_id: 3, ke_id: 4, ke_tingkat: 'lokal' },
+  { ...base, id: 3, dari_id: 5, ke_id: 6, ke_tingkat: 'global', ke_indikator: ['Rupiah'], dari_sektor: ['Minyak & Gas'] },
+  { ...base, id: 4, dari_id: 7, ke_id: 8, ke_tingkat: 'lokal', dari_sektor: ['Energi'] },
+], { approvedIds: new Set([8]), signals: [{ id: 'energi', nama: 'Energi', bergerak: true, label: 'Brent +5%' }] });
+ok(ranked.map((r) => r.id).join(',') === '4,3,2,1' && ranked[0].skor === 3 && ranked[3].skor === 0, 'urutan prioritas: 3 poin > 2 > 1 > 0');
+ok(ranked[0].alasan_prioritas.join(' | ') === 'Berdampak ke Indonesia | Menyambung rantai lama | Energi: Brent +5%', 'alasan prioritas ditampilkan');
+
+// ---- Batas 5 tinjauan per malam ----
+const insEv = sq.prepare("INSERT INTO events (run_id, tanggal, judul, ringkasan, tingkat, sektor, indikator, dua_sisi, dampak, created_at) VALUES (1, ?, ?, '', ?, ?, '[]', '', '[]', ?)");
+for (const [j, t, sk] of [['Ekspor tekstil turun', 'lokal', '["Tekstil & Pakaian"]'], ['Tarif baru AS', 'global', '["Perdagangan & Logistik"]'], ['Harga nikel naik', 'global', '["Mineral & Pertambangan"]']]) {
+  insEv.run(new Date().toISOString().slice(0, 10), j, t, sk, new Date().toISOString());
+}
+const evIds = sq.prepare("SELECT id FROM events ORDER BY id").all().map((r) => r.id);
+const tambahan = sq.prepare("INSERT OR IGNORE INTO links (dari_id, ke_id, jenis, alasan, keyakinan, status, dibuat_oleh, created_at) VALUES (?, ?, 'menyebabkan', 'uji', 0.3, 'usulan', 'ai', ?)");
+for (let i = 0; i < evIds.length; i++) for (let j = 0; j < evIds.length; j++) if (i !== j) tambahan.run(evIds[i], evIds[j], new Date().toISOString());
+[s, d] = await call('GET', '/api/review', null, 'rahasia123');
+const kolam = d.pending.length + d.menunggu;
+// Satu kaitan sudah disetujui hari ini di uji sebelumnya, jadi slot malam ini tinggal 4.
+ok(d.sudah === 1 && d.slot === 4 && d.pending.length === 4 && d.menunggu === kolam - 4 && kolam > 5, `tinjau: hanya 5 keputusan per malam (1 sudah, 4 dari ${kolam} usulan tampil)`);
+ok(d.pending.every((p, i, a) => i === 0 || a[i - 1].skor >= p.skor), 'tinjau: urut menurut skor prioritas');
+for (const p of d.pending.slice(0, 2)) await call('POST', '/api/links/' + p.id, { status: p.id % 2 ? 'disetujui' : 'ditolak' }, 'rahasia123');
+[s, d] = await call('GET', '/api/review', null, 'rahasia123');
+ok(d.pending.length === 2 && d.sudah === 3, 'setelah 2 keputusan lagi, sisa slot malam ini 2');
+[s, d] = await call('GET', '/api/status', null, 'rahasia123');
+ok(d.tinjau.sisa === 2 && d.tinjau.maks === 5, 'status: lencana Tinjau menunjukkan sisa 2');
+const anyDecided = sq.prepare("SELECT id FROM links WHERE decided_at IS NOT NULL AND dibuat_oleh='ai' ORDER BY decided_at DESC, id DESC LIMIT 1").get().id;
+await call('POST', '/api/links/' + anyDecided, { status: 'usulan' }, 'rahasia123');
+[s, d] = await call('GET', '/api/review', null, 'rahasia123');
+ok(d.sudah === 2 && d.pending.length === 3, 'membatalkan keputusan mengembalikan slotnya');
+[s, d] = await call('GET', '/api/status');
+ok(d.tinjau === null && Array.isArray(d.signals) && d.kelompok.length === 6, 'status publik: tanpa info tinjauan, dengan sinyal dan kelompok');
+
+// ---- Rantai utama ----
+[s, d] = await call('GET', '/api/chains');
+ok(s === 200 && d.chains.length >= 1 && d.chains[0].jalur.length >= 2 && d.chains[0].jalur[0].link === null, 'rantai utama: daftar rantai dengan akar dan jalur');
+const hormuzChain = d.chains.find((c) => c.jalur.some((x) => x.event.judul.includes('Hormuz')));
+ok(hormuzChain && hormuzChain.kelompok.includes('energi') && hormuzChain.dua_sisi, 'rantai memuat kelompok sektor dan label ⚖️');
+[s, d] = await call('GET', '/api/chains?kelompok=industri');
+ok(d.chains.every((c) => c.kelompok.includes('industri')), 'rantai utama bisa disaring per kelompok');
 
 console.log('... pembaruan kedua (berita baru, ada peristiwa lama)');
 round = 1; failSchemaOnce = false;
@@ -147,9 +244,12 @@ const l2 = sq.prepare("SELECT * FROM links WHERE run_id = ?").all(d.runId);
 ok(l2.some((l) => l.jenis === 'menyebabkan' && l.alasan === 'Lama ke baru'), 'kaitan lama->baru diterima, jenis aneh jadi "menyebabkan"');
 ok(!l2.some((l) => l.alasan === 'lama-lama ditolak'), 'kaitan lama->lama ditolak');
 
-round = 1;
+round = 1; marketDown = true;
 [s, d] = await doRun(1);
-ok(s === 200, 'pembaruan ulang berjalan (berita yang belum dipakai ditawarkan lagi)');
+ok(s === 200 && d.ok, 'pembaruan ulang berjalan walau sumber kurs gagal');
+const lastNote = sq.prepare('SELECT note FROM runs ORDER BY id DESC LIMIT 1').get().note;
+ok(/USD\/IDR gagal \(HTTP 503\)/.test(lastNote), 'kegagalan sumber harga dicatat');
+marketDown = false;
 
 const evId = sq.prepare('SELECT id FROM events LIMIT 1').get().id;
 [s] = await call('POST', '/api/forecasts', { event_id: evId, teks: 'Harga BBM naik', hari: 30 }, 'rahasia123');

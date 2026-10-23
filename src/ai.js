@@ -1,4 +1,4 @@
-import { MODEL, FALLBACK_MODEL, AI_DAILY_LIMIT, SEKTOR, INDIKATOR, JENIS } from './constants.js';
+import { MODEL, FALLBACK_MODEL, AI_DAILY_LIMIT, SEKTOR, INDIKATOR, JENIS, LINTAS_SEKTOR } from './constants.js';
 import { wibDate } from './util.js';
 
 export class QuotaError extends Error {}
@@ -118,16 +118,16 @@ Tugas: dari daftar judul berita bernomor, susun daftar PERISTIWA yang penting ba
 Aturan:
 - Pilih hanya berita yang berdampak pada ekonomi makro, pasar keuangan, komoditas, energi, pangan, kebijakan pemerintah atau bank sentral, perdagangan, atau geopolitik yang dapat memengaruhi harga dan pasokan.
 - ABAIKAN: kasus kriminal dan korupsi perorangan, gosip, olahraga, hiburan, profil tokoh, tips konsumen, kecelakaan kecil, dan berita perusahaan asing yang tidak berkaitan dengan Indonesia atau komoditas.
-- Gabungkan berita yang membahas kejadian yang sama menjadi satu peristiwa dan cantumkan semua nomornya.
+- Gabungkan berita yang membahas kejadian yang sama menjadi satu peristiwa dan cantumkan semua nomornya. Berita media Indonesia (ID) dan internasional (INTL) tentang kejadian yang sama WAJIB digabung, walaupun bahasanya berbeda.
 - Maksimal 12 peristiwa, boleh lebih sedikit. Lebih baik 6 peristiwa yang relevan daripada 12 yang asal.
 - "judul": spesifik dan informatif, maksimal 14 kata, menyebut SIAPA/APA dan angkanya bila ada. Contoh baik: "BI menahan BI Rate di 5,75% dan menaikkan deposit facility". Contoh buruk: "Kebijakan BI", "Kebijakan Pemerintah", "Pengembangan Teknologi".
 - Pertahankan tingkat kepastian berita. Bila judul menyebut rumor, dugaan, rencana, atau prediksi, tulis tetap sebagai rumor/dugaan/rencana/prediksi. Jangan mengubahnya menjadi fakta.
 - "tingkat": "lokal" bila kejadiannya di Indonesia, "global" bila di luar Indonesia.
-- "sektor": 1 sampai 3 label yang LANGSUNG terdampak, HANYA dari daftar: ${SEKTOR.join('; ')}.
+- "sektor": 1 sampai 3 label yang LANGSUNG terdampak, HANYA dari daftar: ${SEKTOR.join('; ')}. ${LINTAS_SEKTOR.join(' dan ')} hanya boleh dipakai bersama minimal satu sektor ekonomi lain yang terdampak.
 - "indikator": label indikator pasar yang LANGSUNG terpengaruh, HANYA dari daftar: ${INDIKATOR.join('; ')}. Kosongkan ([]) bila tidak ada hubungan langsung.
 - "artikel": nomor berita sumber. Wajib diisi.
 - "ringkasan": 1 sampai 2 kalimat faktual, hanya berdasarkan judul. Jangan menambah angka atau fakta yang tidak ada.
-- "dua_sisi": bila media Indonesia (ID) dan internasional (INTL) menyorot sudut berbeda untuk peristiwa yang sama, jelaskan dalam 1 kalimat. Bila tidak ada, string kosong.
+- "dua_sisi": bila media Indonesia (ID) dan internasional (INTL) menyorot sudut berbeda untuk peristiwa yang sama, jelaskan dalam 1 kalimat: apa yang disorot media Indonesia dan apa yang disorot media internasional. Bila sudutnya sama atau hanya ada satu jenis media, string kosong.
 - "dampak": 0 sampai 2 hipotesis dampak lanjutan ke Indonesia, masing-masing {"teks": ..., "hari": jangka waktu 7 sampai 90}. Tulis sebagai hipotesis.
 - Seluruh teks dalam Bahasa Indonesia.
 Jawab HANYA dengan JSON tanpa teks lain, dengan bentuk:

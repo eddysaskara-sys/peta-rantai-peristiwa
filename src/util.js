@@ -1,4 +1,19 @@
+import { KELOMPOK } from './constants.js';
+
 const WIB_MS = 7 * 3600 * 1000;
+
+const KELOMPOK_DARI_SEKTOR = new Map(KELOMPOK.flatMap((k) => k.sektor.map((s) => [s, k.id])));
+
+/** Kelompok (id) dari daftar label sektor rinci, urut sesuai daftar KELOMPOK. */
+export function kelompokOf(sektor) {
+  const ids = new Set((sektor || []).map((s) => KELOMPOK_DARI_SEKTOR.get(s)).filter(Boolean));
+  return KELOMPOK.map((k) => k.id).filter((id) => ids.has(id));
+}
+
+/** Awal hari WIB (00.00) dalam ISO UTC, untuk membandingkan dengan kolom *_at. */
+export function wibDayStartIso(day = wibDate()) {
+  return new Date(`${day}T00:00:00+07:00`).toISOString();
+}
 
 /** Tanggal WIB (YYYY-MM-DD) untuk sebuah waktu, default sekarang. */
 export function wibDate(d = new Date()) {

@@ -1,4 +1,5 @@
 import { collectHeadlines } from './sources.js';
+import { collectMarket } from './market.js';
 import { runJson, clusterPrompt, linkPrompt, CLUSTER_SCHEMA, LINK_SCHEMA } from './ai.js';
 import { SEKTOR, INDIKATOR, JENIS } from './constants.js';
 import { wibDate, wibDateDaysAgo, nowIso, parseList, matchLabels } from './util.js';
@@ -28,6 +29,13 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
   const notes = [];
 
   try {
+    // 0. Ambil harga pasar (untuk prioritas sektor). Gagal di sini tidak menghentikan pembaruan.
+    try {
+      notes.push(await collectMarket(env));
+    } catch (e) {
+      notes.push('Harga pasar gagal: ' + String(e.message || e).slice(0, 120));
+    }
+
     // 1. Ambil berita
     const { headlines, errors, stats = [] } = await collectHeadlines(days);
     notes.push('Berita per sumber: ' + stats.join(', '));
