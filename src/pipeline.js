@@ -121,7 +121,9 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
 
     // 3b. Riwayat: catat beberapa hipotesis dampak AI sebagai contoh perkiraan, untuk dicek semi-otomatis.
     if (jendela && newEvents.length) {
-      const contoh = pilihContohPerkiraan(newEvents);
+      // Satu contoh per hari dalam jendela (maks. RIWAYAT_PERKIRAAN), supaya Perkiraan tidak penuh contoh.
+      const hari = Math.round((Date.parse(jendela.sampai) - Date.parse(jendela.mulai)) / 86400000) + 1;
+      const contoh = pilihContohPerkiraan(newEvents, Math.min(RIWAYAT_PERKIRAAN, hari));
       if (contoh.length) {
         await db.batch(
           contoh.map((c) =>

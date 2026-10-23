@@ -144,6 +144,7 @@ async function route(request, env) {
       riwayat: await statusRiwayat(db),
       riwayatJendela: RIWAYAT_JENDELA,
       riwayatCentang: RIWAYAT_CENTANG,
+      sejak: (await db.prepare("SELECT MIN(tanggal) AS t FROM events WHERE status = 'aktif'").first())?.t || null,
     });
   }
 

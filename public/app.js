@@ -307,36 +307,38 @@ function cekSumberHtml(run) {
     </details>`;
 }
 
-// ---------- Isi riwayat ----------
+// ---------- Usulan kaitan lain + ambil berita tanggal lampau ----------
 function riwayatHtml(d) {
   const st = d.riwayatStatus;
   const today = state.status.today;
-  const jendela = state.status.riwayatJendela || 4;
-  let prog = '<p>Riwayat belum pernah diisi.</p>';
-  if (st) {
-    const jalan = st.antre + st.berjalan;
-    prog = `<p><b>${st.selesai} dari ${st.total} giliran selesai</b> (${tgl(st.mulai)} – ${tgl(st.sampai)}): ${st.peristiwa} peristiwa, ${st.kaitan} usulan kaitan.${st.gagal ? ` ${st.gagal} giliran gagal; tekan "Isi riwayat" lagi untuk mengulanginya.` : ''}</p>
-      ${jalan ? `<p class="muted small">${jalan} giliran menunggu. Satu giliran diproses tiap ±5 menit selama kuota AI hari ini masih cukup; bila kuota menipis, dilanjutkan besok.</p>` : ''}`;
-  }
   const r = d.riwayat || { pending: [], total: 0 };
-  return `<section class="section" id="riwayat">
-    <div class="section-head"><h2>Riwayat</h2><span class="muted small">diambil ${jendela} hari per giliran</span></div>
-    <p class="lead">Isi peristiwa sebelum aplikasi dipakai (mis. sejak awal Oktober) dari arsip berita Google News, lengkap dengan usulan kaitan ke rantai dan contoh perkiraan yang bisa dicek apakah sudah terjadi.</p>
-    <div class="run-box">
-      <div>${prog}</div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <label class="small" for="rw-mulai" style="margin:0">Mulai</label>
-        <input type="date" id="rw-mulai" value="${st?.mulai || '2026-10-01'}" max="${today}">
-        <button class="btn primary" id="rw-btn" type="button">Isi riwayat</button>
-      </div>
-    </div>
-    <p id="rw-msg" class="muted small" style="margin-top:8px"></p>
-    <div class="section-head" style="margin-top:20px"><h3>Usulan kaitan dari riwayat (${r.total})</h3><span class="muted small">Tidak memakai jatah ${d.maks} usulan per malam</span></div>
-    ${r.pending.length ? rwChecklistHtml(r) : `<div class="empty">${st ? '<strong>Semua usulan riwayat sudah diputuskan.</strong>Kaitan yang disetujui sudah tampil di Rantai.' : 'Belum ada usulan dari riwayat.'}</div>`}
-  </section>`;
+  const jalan = st ? st.antre + st.berjalan : 0;
+  const prog = st
+    ? `<p class="small">Terakhir: ${st.selesai} dari ${st.total} giliran selesai (${tgl(st.mulai)} – ${tgl(st.sampai)}).${st.gagal ? ` ${st.gagal} giliran gagal; tekan "Ambil" lagi untuk mengulanginya.` : ''}${jalan ? ` ${jalan} giliran menunggu dan diproses bertahap selama kuota AI hari ini cukup.` : ''}</p>`
+    : '';
+  const list = r.pending.length
+    ? `<section class="section" id="riwayat">
+        <div class="section-head"><h2>Usulan kaitan lain (${r.total})</h2><span class="muted small">Di luar jatah ${d.maks} per malam</span></div>
+        ${rwChecklistHtml(r)}
+      </section>`
+    : '';
+  return `${list}
+    <section class="section">
+      <details class="cs-result"${jalan ? ' open' : ''}>
+        <summary>Ambil berita tanggal lampau</summary>
+        <p class="small muted" style="margin:8px 0">Untuk tanggal yang terlewat, mis. saat pembaruan gagal. Berita diambil dari arsip Google News (paling jauh 60 hari) lalu diproses seperti pembaruan biasa.</p>
+        ${prog}
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+          <label class="small" for="rw-mulai" style="margin:0">Mulai</label>
+          <input type="date" id="rw-mulai" value="${st?.mulai || today.slice(0, 8) + '01'}" max="${today}">
+          <button class="btn ghost small-btn" id="rw-btn" type="button">Ambil</button>
+        </div>
+        <p id="rw-msg" class="muted small" style="margin-top:8px"></p>
+      </details>
+    </section>`;
 }
 
-// ---------- Setujui sekaligus (usulan riwayat) ----------
+// ---------- Setujui sekaligus (usulan di luar antrean malam) ----------
 const rwPct = (x) => Math.round((x || 0) * 100);
 
 function rwChecklistHtml(r) {
@@ -360,7 +362,7 @@ function rwChecklistHtml(r) {
       </div>
     </li>`;
   };
-  return `<p class="lead">Periksa daftar ini, hapus centang pada kaitan yang tidak cocok, lalu setujui sekaligus. Usulan dengan keyakinan AI ≥ ${rwPct(batas)}% sudah tercentang. Klik judul peristiwa untuk membaca beritanya. Yang tidak dicentang tetap menunggu, kecuali Anda menolaknya.</p>
+  return `<p class="lead">Usulan kaitan di luar antrean malam. Periksa daftar ini, hapus centang pada kaitan yang tidak cocok, lalu setujui sekaligus. Usulan dengan keyakinan AI ≥ ${rwPct(batas)}% sudah tercentang. Klik judul peristiwa untuk membaca beritanya. Yang tidak dicentang tetap menunggu, kecuali Anda menolaknya.</p>
     <div class="rw-tools" role="group" aria-label="Centang cepat">
       <span class="small muted">Centang:</span>
       <button type="button" class="fchip" data-rwpick="yakin">Keyakinan ≥ ${rwPct(batas)}% <span class="muted">${nYakin}</span></button>
@@ -415,12 +417,12 @@ function bindRwChecklist(d) {
   };
   approve.addEventListener('click', () => {
     const ids = boxes.filter((b) => b.checked).map((b) => Number(b.dataset.rwid));
-    send({ setujui: ids }, (r) => `${r.disetujui} kaitan riwayat disetujui dan sudah tampil di Rantai.`);
+    send({ setujui: ids }, (r) => `${r.disetujui} kaitan disetujui dan sudah tampil di Rantai.`);
   });
   reject.addEventListener('click', () => {
     const ids = boxes.filter((b) => !b.checked).map((b) => Number(b.dataset.rwid));
-    if (!confirm(`Tolak ${ids.length} usulan riwayat yang tidak dicentang? Usulan yang ditolak tidak akan tampil lagi.`)) return;
-    send({ tolak: ids }, (r) => `${r.ditolak} usulan riwayat ditolak.`);
+    if (!confirm(`Tolak ${ids.length} usulan yang tidak dicentang? Usulan yang ditolak tidak akan tampil lagi.`)) return;
+    send({ tolak: ids }, (r) => `${r.ditolak} usulan ditolak.`);
   });
   sync();
 }
@@ -433,8 +435,8 @@ function bindRiwayat(d) {
       const r = await api('/api/riwayat', { method: 'POST', body: JSON.stringify({ mulai: $('#rw-mulai').value }) });
       if (!r.ok) throw new Error(r.message || 'Gagal.');
       $('#rw-msg').textContent = r.jendela
-        ? `${r.jendela} giliran masuk antrean (${tgl(r.mulai)} – ${tgl(r.sampai)}). Hasilnya muncul bertahap; contoh perkiraan dicek AI setelah semua giliran selesai.`
-        : `Rentang ${tgl(r.mulai)} – ${tgl(r.sampai)} sudah diisi atau sedang antre.`;
+        ? `${r.jendela} giliran masuk antrean (${tgl(r.mulai)} – ${tgl(r.sampai)}). Hasilnya muncul bertahap di Linimasa.`
+        : `Tanggal ${tgl(r.mulai)} – ${tgl(r.sampai)} sudah terisi atau sedang antre.`;
     } catch (e) {
       $('#rw-msg').textContent = e.message;
     }
@@ -711,7 +713,7 @@ async function renderRantaiUtama() {
         <span style="display:flex;gap:8px"><button type="button" class="btn ghost small-btn" id="hint-close">Tutup</button><button type="button" class="btn primary small-btn" id="hint-open">Buka Panduan</button></span></div>`
     : '';
   const riw = state.owner && t && t.riwayat
-    ? `<p class="muted small" style="margin:-12px 0 20px">Ada juga ${t.riwayat} usulan kaitan dari riwayat${st.riwayat?.mulai ? ` (sejak ${tgl(st.riwayat.mulai)})` : ''} yang belum masuk Rantai. <button type="button" class="linklike plainbtn" id="go-riwayat">Setujui sekaligus di Tinjau</button></p>`
+    ? `<p class="muted small" style="margin:-12px 0 20px">Ada juga ${t.riwayat} usulan kaitan lain yang bisa disetujui sekaligus. <button type="button" class="linklike plainbtn" id="go-riwayat">Buka di Tinjau</button></p>`
     : '';
   view.innerHTML = `
     ${baru}
@@ -964,7 +966,7 @@ function fcActionsHtml(f) {
 function fcItemHtml(f) {
   const st = fcState(f);
   return `<article class="fc ${st}" id="fc-${f.id}">
-    <div class="fc-top"><span class="fc-badge ${st}">${FC_LABEL[st]}</span>${f.asal === 'riwayat' ? '<span class="chip" title="Dicatat otomatis dari hipotesis AI saat mengisi riwayat">Contoh dari riwayat</span>' : ''}<span class="muted small">dicek ${tgl(f.tanggal_cek)}</span></div>
+    <div class="fc-top"><span class="fc-badge ${st}">${FC_LABEL[st]}</span><span class="muted small">dicek ${tgl(f.tanggal_cek)}</span></div>
     <p class="fc-text">${esc(f.teks)}</p>
     <p class="muted small" style="margin-top:4px">Dari: <button type="button" class="linklike plainbtn" data-open="${f.event_id}">${esc(f.event_judul)}</button>${f.event_tanggal ? ` (${tgl(f.event_tanggal)})` : ''}</p>
     ${saranHtml(f)}
@@ -1061,14 +1063,14 @@ function renderPanduan() {
       <h2>Panduan</h2>
       <p class="lead" style="margin-top:8px">Aplikasi ini adalah <b>peta sebab-akibat</b>: ia menunjukkan bagaimana satu kejadian, misalnya konflik di jalur kapal minyak, merambat menjadi kejadian lain sampai ke Indonesia, misalnya harga BBM atau nilai rupiah. Ini alat bantu berpikir, <b>bukan saran beli atau jual</b>.</p>
       <div class="seg" role="group" aria-label="Pilih panduan">${tab('pengunjung', 'Untuk pengunjung (tanpa PIN)')}${tab('pemilik', 'Untuk pemilik (dengan PIN)')}</div>
-      <div class="guide-body">${mode === 'pemilik' ? panduanPemilik() : panduanPengunjung(src)}</div>
+      <div class="guide-body">${mode === 'pemilik' ? panduanPemilik() : panduanPengunjung(src, st.sejak)}</div>
     </section>`;
   view.querySelectorAll('[data-guide]').forEach((b) => b.addEventListener('click', () => { state.guideMode = b.dataset.guide; renderPanduan(); }));
   view.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => go(b.dataset.goto)));
   return Promise.resolve();
 }
 
-function panduanPengunjung(src) {
+function panduanPengunjung(src, sejak) {
   const goto = (tab, label) => `<button type="button" class="linklike plainbtn" data-goto="${tab}">${label}</button>`;
   return `
     <div class="guide-card">
@@ -1126,6 +1128,7 @@ function panduanPengunjung(src) {
     <div class="guide-card">
       <h3>Dari mana datanya</h3>
       <ul class="steps">
+        ${sejak ? `<li><b>Cakupan:</b> peristiwa tercatat sejak ${tgl(sejak)} dan diperbarui setiap hari pukul 17.30 WIB.</li>` : ''}
         <li><b>Berita:</b> ${src.rss_lokal || 0} feed media Indonesia dan ${src.rss_internasional || 0} feed media internasional (${esc((src.media_rss || []).join(', '))}), ditambah ${(src.topik_id || 0) + (src.topik_en || 0)} topik pencarian Google News yang menjangkau puluhan media lain.</li>
         <li><b>Harga:</b> ${(src.harga || []).map((h) => `${esc(h.nama)} (${esc(h.sumber)})`).join('; ')}. Harga hanya dipakai di belakang layar untuk menentukan sektor yang bergerak dan sebagai bukti perkiraan.</li>
         <li><b>AI:</b> Cloudflare Workers AI (kuota gratis) menyusun peristiwa, mengusulkan kaitan, dan memberi saran pengecekan perkiraan.</li>
@@ -1177,14 +1180,14 @@ function panduanPemilik() {
       <dl class="legend-list">
         <dt>Ambil berita sekarang</dt><dd>Pembaruan di luar jadwal 17.30 WIB. Masuk antrean dan diproses paling lambat 5 menit kemudian.</dd>
         <dt>Cek sumber berita</dt><dd>Memeriksa setiap media dan topik: berapa judul yang didapat dan mana yang gagal. Tidak memakai kuota AI.</dd>
-        <dt>Isi riwayat</dt><dd>Mengambil berita lampau sejak tanggal yang Anda pilih (paling jauh 60 hari), 4 hari per giliran. Hasilnya: peristiwa di Linimasa, usulan kaitan riwayat (antrean sendiri, tidak memakai jatah 5 per malam), dan beberapa contoh perkiraan yang dicek AI setelah semua giliran selesai.</dd>
-        <dt>Setujui sekaligus</dt><dd>Usulan kaitan riwayat tampil sebagai daftar centang. Yang keyakinan AI-nya tinggi sudah tercentang; hapus centang yang tidak cocok, lalu klik <b>Setujui</b>. Kaitan yang disetujui langsung masuk ke Rantai, sehingga rantai memanjang mundur ke tanggal riwayat.</dd>
+        <dt>Ambil berita tanggal lampau</dt><dd>Untuk tanggal yang terlewat, mis. saat pembaruan gagal. Pilih tanggal mulai (paling jauh 60 hari); berita diambil dari arsip Google News dan diproses seperti pembaruan biasa.</dd>
+        <dt>Usulan kaitan lain</dt><dd>Usulan di luar antrean 5 per malam tampil sebagai daftar centang. Yang keyakinan AI-nya tinggi sudah tercentang; hapus centang yang tidak cocok, lalu klik <b>Setujui</b> sekali. Kaitan yang disetujui langsung masuk ke Rantai.</dd>
       </dl>
     </div>
     <div class="guide-card">
       <h3>Batas yang perlu diingat</h3>
       <ul class="steps">
-        <li>Kuota AI gratis: ${st_ai()} panggilan per hari. Riwayat dan pengecekan perkiraan otomatis berhenti lebih dulu agar pembaruan harian tetap berjalan; sisanya dilanjutkan besok.</li>
+        <li>Kuota AI gratis: ${st_ai()} panggilan per hari. Pengambilan berita tanggal lampau dan pengecekan perkiraan otomatis berhenti lebih dulu agar pembaruan harian tetap berjalan; sisanya dilanjutkan besok.</li>
         <li>Pengunjung tidak bisa mengubah apa pun; semua tombol pemilik membutuhkan PIN.</li>
       </ul>
     </div>`;
