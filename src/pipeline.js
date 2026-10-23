@@ -423,10 +423,15 @@ export async function runScan(env, { runId = null, otomatis = false, cadangan = 
       return { ok: true, runId, links: 0 };
     }
     const code = new Map(events.map((e, i) => [e.id, 'E' + (i + 1)]));
-    const ph = events.map(() => '?').join(',');
-    const ids = events.map((e) => e.id);
+    // Tanpa daftar id (D1 membatasi 100 variabel per query): semua kaitan yang ujungnya ada di rentang ini.
     const ada = (
-      await db.prepare(`SELECT dari_id, ke_id FROM links WHERE dari_id IN (${ph}) OR ke_id IN (${ph})`).bind(...ids, ...ids).all()
+      await db
+        .prepare(
+          `SELECT l.dari_id, l.ke_id FROM links l JOIN events d ON d.id = l.dari_id JOIN events k ON k.id = l.ke_id
+           WHERE d.tanggal >= ? OR k.tanggal >= ?`
+        )
+        .bind(events[0].tanggal, events[0].tanggal)
+        .all()
     ).results;
     const existing = new Set(ada.flatMap((l) => [`${l.dari_id}-${l.ke_id}`, `${l.ke_id}-${l.dari_id}`]));
     const tercatat = ada.filter((l) => code.has(l.dari_id) && code.has(l.ke_id)).map((l) => `${code.get(l.dari_id)}→${code.get(l.ke_id)}`);
@@ -617,12 +622,15 @@ async function existingPairs(db, links) {
   const ids = [...new Set(links.flatMap((l) => [l.dari, l.ke]))];
   const set = new Set();
   if (!ids.length) return set;
-  const ph = ids.map(() => '?').join(',');
-  const rows = await db
-    .prepare(`SELECT dari_id, ke_id FROM links WHERE dari_id IN (${ph}) OR ke_id IN (${ph})`)
-    .bind(...ids, ...ids)
-    .all();
-  rows.results.forEach((r) => set.add(`${r.dari_id}-${r.ke_id}`));
+  for (let i = 0; i < ids.length; i += 45) {
+    const chunk = ids.slice(i, i + 45);
+    const ph = chunk.map(() => '?').join(',');
+    const rows = await db
+      .prepare(`SELECT dari_id, ke_id FROM links WHERE dari_id IN (${ph}) OR ke_id IN (${ph})`)
+      .bind(...chunk, ...chunk)
+      .all();
+    rows.results.forEach((r) => set.add(`${r.dari_id}-${r.ke_id}`));
+  }
   return set;
 }
 

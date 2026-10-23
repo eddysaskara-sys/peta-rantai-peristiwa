@@ -51,6 +51,20 @@ export function parseList(value) {
   }
 }
 
+/**
+ * Jalankan query "... IN (?)" per potongan, karena D1 membatasi 100 variabel per query.
+ * sql: fungsi (placeholder) -> teks SQL. extra: parameter lain yang ditaruh SEBELUM daftar id.
+ */
+export async function allInChunks(db, sql, ids, extra = [], size = 90) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += size) {
+    const chunk = ids.slice(i, i + size);
+    const rows = await db.prepare(sql(chunk.map(() => '?').join(','))).bind(...extra, ...chunk).all();
+    out.push(...rows.results);
+  }
+  return out;
+}
+
 export function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }

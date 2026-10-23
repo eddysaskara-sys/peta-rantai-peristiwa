@@ -13,7 +13,7 @@ import {
   RIWAYAT_JENDELA,
   RIWAYAT_CENTANG,
 } from './constants.js';
-import { json, parseList, safeEqual, wibDate, wibDateDaysAgo, addDays, nowIso, kelompokOf } from './util.js';
+import { json, parseList, safeEqual, wibDate, wibDateDaysAgo, addDays, nowIso, kelompokOf, allInChunks } from './util.js';
 import { computeSignals, RIWAYAT_HARGA } from './market.js';
 import { reviewQueue, decidedToday, poolCount, historyQueue, riwayatCount } from './priority.js';
 import { forecastOut, ringkasan, KELOMPOK_PERKIRAAN } from './forecast.js';
@@ -252,22 +252,11 @@ async function route(request, env) {
     const down = walk(allLinks, id, depth, 'down');
     const ids = [...new Set([...up, ...down].flat().map((n) => n.eventId))];
     const evMap = new Map();
-    if (ids.length) {
-      const rows = await db
-        .prepare(`SELECT * FROM events WHERE id IN (${ids.map(() => '?').join(',')})`)
-        .bind(...ids)
-        .all();
-      rows.results.forEach((r) => evMap.set(r.id, eventOut(r)));
-    }
+    (await allInChunks(db, (ph) => `SELECT * FROM events WHERE id IN (${ph})`, ids)).forEach((r) => evMap.set(r.id, eventOut(r)));
     const decorate = (levels) =>
       levels.map((lvl) => lvl.map((n) => ({ event: evMap.get(n.eventId), link: n.link, via: n.via })));
     const nodeIds = [id, ...ids];
-    const tercatat = (
-      await db
-        .prepare(`SELECT event_id, teks FROM forecasts WHERE event_id IN (${nodeIds.map(() => '?').join(',')})`)
-        .bind(...nodeIds)
-        .all()
-    ).results;
+    const tercatat = await allInChunks(db, (ph) => `SELECT event_id, teks FROM forecasts WHERE event_id IN (${ph})`, nodeIds);
     return json({ focus: eventOut(focus), up: decorate(up), down: decorate(down), tercatat });
   }
 

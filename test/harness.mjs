@@ -22,7 +22,7 @@ sq.exec(readFileSync(ROOT + '/schema.sql', 'utf8'));
 const norm = (p) => p.map((v) => (v === undefined ? null : v));
 class Stmt {
   constructor(sql) { this.sql = sql; this.p = []; }
-  bind(...p) { this.p = norm(p); return this; }
+  bind(...p) { if (p.length > 100) throw new Error('D1_ERROR: too many SQL variables'); this.p = norm(p); return this; }
   _all() { return sq.prepare(this.sql).all(...this.p); }
   async first() { return this._all()[0] || null; }
   async all() { return { results: this._all() }; }
@@ -642,3 +642,17 @@ round = 9;
 lastLinkPrompt = '';
 [s, d] = await doRun(1);
 ok(d.ok && lastLinkPrompt.includes(dayStr(Date.now() - 40 * 86400e3)), 'pembaruan harian ikut menawarkan peristiwa 40 hari lalu sebagai penyebab');
+
+// D1 membatasi 100 variabel per query: pemindaian dan rantai harus tetap jalan dengan > 100 peristiwa.
+const insBanyak = sq.prepare("INSERT INTO events (run_id, tanggal, judul, ringkasan, tingkat, sektor, indikator, dua_sisi, dampak, created_at) VALUES (1, ?, ?, '', 'global', '[\"Energi\"]', '[]', '', '[]', ?)");
+for (let i = 0; i < 130; i++) insBanyak.run(dayStr(Date.now() - (i % 50) * 86400e3), 'Peristiwa uji banyak ' + i, new Date().toISOString());
+const banyak = sq.prepare("SELECT id FROM events WHERE judul LIKE 'Peristiwa uji banyak %' ORDER BY id").all().map((r) => r.id);
+const insL = sq.prepare("INSERT OR IGNORE INTO links (dari_id, ke_id, jenis, alasan, keyakinan, status, dibuat_oleh, created_at) VALUES (?, ?, 'menyebabkan', 'uji', 0.5, 'disetujui', 'manual', ?)");
+for (let i = 1; i < banyak.length; i++) insL.run(banyak[0], banyak[i], new Date().toISOString());
+sq.prepare("UPDATE ai_usage SET calls = 0 WHERE day = ?").run(today);
+let [, sc3] = await call('POST', '/api/kaitan/cari', {}, OWNER);
+const scanBesar = await tick();
+const sbRow = sq.prepare('SELECT * FROM runs WHERE id = ?').get(sc3.runId);
+ok(sbRow.status === 'selesai' && sbRow.n_events === 150, `pemindaian tetap jalan dengan > 100 peristiwa (${sbRow.status}: ${String(sbRow.note).split('\n').pop()})`);
+[s, d] = await call('GET', '/api/chain/' + banyak[0] + '?depth=1');
+ok(s === 200 && d.down[0].length === banyak.length - 1, `rantai dengan > 100 peristiwa terhubung tetap terbuka (${d.down?.[0]?.length})`);
