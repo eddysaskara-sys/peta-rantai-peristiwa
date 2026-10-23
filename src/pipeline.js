@@ -209,10 +209,13 @@ async function jadwalUlangRiwayat(db, runId, jendela, notes) {
     return { ok: false, runId, message: 'riwayat gagal setelah beberapa kali dicoba' };
   }
   const nanti = new Date(Date.now() + RIWAYAT_ULANG_MENIT * 60000).toISOString();
-  await db
-    .prepare("UPDATE runs SET status = 'antre', started_at = ?, note = ? WHERE id = ?")
-    .bind(nanti, `${penandaJendela(jendela)} percobaan=${coba}\n${notes.slice(1).join('\n')}`.slice(0, 2000), runId)
-    .run();
+  await db.batch([
+    db
+      .prepare("UPDATE runs SET status = 'antre', started_at = ?, note = ? WHERE id = ?")
+      .bind(nanti, `${penandaJendela(jendela)} percobaan=${coba}\n${notes.slice(1).join('\n')}`.slice(0, 2000), runId),
+    // Jeda bersama: giliran riwayat lain juga menunggu, supaya tidak memperpanjang pembatasan.
+    db.prepare("UPDATE runs SET started_at = ? WHERE trigger = 'riwayat' AND status = 'antre' AND started_at < ?").bind(nanti, nanti),
+  ]);
   return { ok: false, runId, ulang: nanti, percobaan: coba };
 }
 

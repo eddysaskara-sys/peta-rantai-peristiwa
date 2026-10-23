@@ -455,6 +455,8 @@ const tolak = await tick();
 const rowTolak = sq.prepare('SELECT * FROM runs WHERE id = ?').get(tolak.runId);
 ok(tolak.percobaan === 1 && rowTolak.status === 'antre' && rowTolak.started_at > new Date().toISOString() && /percobaan=1/.test(rowTolak.note), 'riwayat yang ditolak Google News dijadwalkan ulang 30 menit lagi');
 ok(fetchLog.filter((u) => u.includes('news.google.com')).length === 3, 'berhenti setelah 3 penolakan berturut-turut');
+ok(sq.prepare("SELECT COUNT(*) AS n FROM runs WHERE trigger = 'riwayat' AND status = 'antre' AND started_at <= ?").get(new Date().toISOString()).n === 0, 'semua giliran riwayat ikut menunggu (jeda bersama)');
+sq.prepare("UPDATE runs SET started_at = ? WHERE trigger = 'riwayat' AND status = 'antre' AND id != ?").run(new Date(Date.now() - 60e3).toISOString(), tolak.runId);
 gnewsDown = false;
 for (let i = 0; i < 3; i++) {
   mundurkanRiwayat();
