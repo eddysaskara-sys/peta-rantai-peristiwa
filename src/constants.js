@@ -141,7 +141,7 @@ export const GNEWS_EDISI = {
 };
 export const GNEWS_PER_TOPIK = 20; // judul per topik pada pembaruan harian
 export const RSS_PER_FEED = 20; // cukup karena pemilihan bergiliran hanya mengambil beberapa judul per media
-export const GNEWS_PER_TOPIK_RIWAYAT = 40; // judul per topik untuk satu jendela riwayat
+export const GNEWS_PER_TOPIK_RIWAYAT = 100; // judul per topik untuk satu jendela riwayat (maksimum Google News)
 
 // Media yang dianggap "media Indonesia" walau muncul di edisi internasional, dan sebaliknya.
 // Domain berakhiran .id selalu dianggap media Indonesia.

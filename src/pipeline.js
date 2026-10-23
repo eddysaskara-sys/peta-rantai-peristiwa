@@ -76,7 +76,7 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
     const headlines2 = fresh.map((h) => ({ ...h, id: saved.get(h.url) })).filter((h) => h.id);
 
     // 3. AI menyusun peristiwa
-    const cp = clusterPrompt(headlines2);
+    const cp = clusterPrompt(headlines2, { riwayat: Boolean(jendela) });
     const m1 = {};
     const clustered = await runJson(env, cp.system, cp.user, CLUSTER_SCHEMA, m1);
     const events = normalizeEvents(clustered, headlines2, jendela);

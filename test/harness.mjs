@@ -92,9 +92,11 @@ const gnewsMock = (u) => {
     // Jendela riwayat: 2 berita per topik, bertanggal di dalam jendela.
     const t = Date.parse(w[1] + 'T05:00:00Z') + 86400e3;
     const topik = q.slice(0, 12);
-    return en
+    // Google News kadang menyertakan berita sesudah jendela; harus dibuang.
+    const bocor = gnItem(`Berita sesudah jendela ${w[2]} ${topik}`, 'Kontan', 'kontan.co.id', Date.parse(w[2] + 'T05:00:00Z'));
+    return bocor + (en
       ? gnItem(`Oil prices climb ${w[1]} ${topik}`, 'Reuters', 'www.reuters.com', t) + gnItem(`Shipping rates jump ${w[1]} ${topik}`, 'CNBC', 'www.cnbc.com', t + 3600e3)
-      : gnItem(`Harga BBM nonsubsidi naik ${w[1]} ${topik}`, 'Kontan', 'industri.kontan.co.id', t) + gnItem(`Rupiah melemah ${w[1]} ${topik}`, 'Bisnis.com', 'market.bisnis.com', t + 7200e3);
+      : gnItem(`Harga BBM nonsubsidi naik ${w[1]} ${topik}`, 'Kontan', 'industri.kontan.co.id', t) + gnItem(`Rupiah melemah ${w[1]} ${topik}`, 'Bisnis.com', 'market.bisnis.com', t + 7200e3));
   }
   const after = /after:(\d{4}-\d{2}-\d{2})/.exec(q);
   if (after) {
@@ -449,6 +451,7 @@ for (let i = 0; i < 3; i++) {
 const rwEvents = sq.prepare("SELECT e.* FROM events e JOIN runs r ON r.id = e.run_id WHERE r.trigger = 'riwayat'").all();
 ok(rwEvents.length === sq.prepare('SELECT COUNT(*) AS n FROM events').get().n - nEvBefore && rwEvents.every((e) => e.tanggal >= mulai && e.tanggal < today), 'peristiwa riwayat bertanggal di dalam jendelanya');
 const rwArts = sq.prepare("SELECT a.* FROM articles a JOIN runs r ON r.id = a.run_id WHERE r.trigger = 'riwayat'").all();
+ok(rwArts.length > 0 && !rwArts.some((a) => a.title.startsWith('Berita sesudah jendela')), 'berita di luar jendela riwayat dibuang walau dikirim Google News');
 ok(rwArts.some((a) => a.origin === 'lokal' && a.source === 'industri.kontan.co.id') && rwArts.some((a) => a.origin === 'internasional' && a.source === 'reuters.com'), 'riwayat mengambil media lokal dan internasional lewat Google News');
 const sigAfter = JSON.stringify((await call('GET', '/api/market'))[1].signals.map((x) => [x.id, x.label]));
 ok(sigBefore === sigAfter, 'peristiwa riwayat tidak mengacaukan sinyal lonjakan berita hari ini');

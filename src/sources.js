@@ -92,15 +92,16 @@ export async function collectHeadlines(opts = {}) {
   const gnews = (await gnewsPromise).flat();
   let all = [...gdelt, ...rss, ...gnews];
   if (jendela) {
-    // Toleransi 1 hari di kedua sisi karena zona waktu; tanggal peristiwa nanti dijepit ke jendela.
-    const from = Date.parse(`${addDays(jendela.mulai, -1)}T00:00:00+07:00`);
-    const to = Date.parse(`${addDays(jendela.sampai, 2)}T00:00:00+07:00`);
+    // Google News tidak selalu menaati after:/before: (uji 23 Okt: jendela 1-4 Okt berisi berita 5 Okt),
+    // jadi tanggal disaring ketat menurut WIB, lalu dipilih merata per hari.
+    const from = Date.parse(`${jendela.mulai}T00:00:00+07:00`);
+    const to = Date.parse(`${addDays(jendela.sampai, 1)}T00:00:00+07:00`);
     all = all.filter((a) => a.published_at && Date.parse(a.published_at) >= from && Date.parse(a.published_at) < to);
   } else {
     const cutoff = Date.now() - (days + 1) * 86400000;
     all = all.filter((a) => !a.published_at || Date.parse(a.published_at) >= cutoff);
   }
-  return { headlines: selectHeadlines(all), errors, stats, total: all.length };
+  return { headlines: selectHeadlines(all, MAX_LOKAL, MAX_INTERNASIONAL, { perHari: Boolean(jendela) }), errors, stats, total: all.length };
 }
 
 /** Alamat pencarian Google News RSS untuk satu topik. */
@@ -196,7 +197,7 @@ export function parseRss(xml, source, origin, limit = 30) {
  * Buang duplikat, lalu pilih bergiliran per media (terbaru dulu di tiap media), terpisah untuk
  * media lokal dan internasional. Urutan hasil: semua lokal dulu, lalu internasional.
  */
-export function selectHeadlines(list, maxLokal = MAX_LOKAL, maxIntl = MAX_INTERNASIONAL) {
+export function selectHeadlines(list, maxLokal = MAX_LOKAL, maxIntl = MAX_INTERNASIONAL, { perHari = false } = {}) {
   const seenUrl = new Set();
   const seenTitle = new Set();
   const unique = [];
@@ -208,9 +209,28 @@ export function selectHeadlines(list, maxLokal = MAX_LOKAL, maxIntl = MAX_INTERN
     unique.push(a);
   }
   unique.sort((a, b) => (b.published_at || '').localeCompare(a.published_at || ''));
-  const lokal = roundRobin(unique.filter((a) => a.origin === 'lokal'), maxLokal);
-  const intl = roundRobin(unique.filter((a) => a.origin !== 'lokal'), maxIntl);
+  const pick = perHari ? roundRobinPerHari : roundRobin;
+  const lokal = pick(unique.filter((a) => a.origin === 'lokal'), maxLokal);
+  const intl = pick(unique.filter((a) => a.origin !== 'lokal'), maxIntl);
   return [...lokal, ...intl];
+}
+
+/** Riwayat: bergiliran per hari (WIB), dan di dalam tiap hari bergiliran per media. */
+function roundRobinPerHari(items, max) {
+  const byDay = new Map();
+  for (const a of items) {
+    const d = a.published_at ? new Date(Date.parse(a.published_at) + 7 * 3600e3).toISOString().slice(0, 10) : '';
+    if (!byDay.has(d)) byDay.set(d, []);
+    byDay.get(d).push(a);
+  }
+  const queues = [...byDay.values()].map((list) => roundRobin(list, list.length));
+  const out = [];
+  let i = 0;
+  while (out.length < max && queues.some((q) => q.length)) {
+    const q = queues[i++ % queues.length];
+    if (q.length) out.push(q.shift());
+  }
+  return out.sort((a, b) => (b.published_at || '').localeCompare(a.published_at || ''));
 }
 
 export function titleKey(t) {

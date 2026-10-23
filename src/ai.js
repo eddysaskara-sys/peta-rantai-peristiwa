@@ -112,7 +112,7 @@ export const CLUSTER_SCHEMA = {
   required: ['peristiwa'],
 };
 
-export function clusterPrompt(headlines) {
+export function clusterPrompt(headlines, { riwayat = false } = {}) {
   const system = `Kamu analis ekonomi dan geopolitik yang membantu seorang investor di Indonesia memahami kaitan peristiwa global dan lokal.
 Tugas: dari daftar judul berita bernomor, susun daftar PERISTIWA yang penting bagi ekonomi dan pasar.
 Aturan:
@@ -128,7 +128,7 @@ Aturan:
 - "artikel": nomor berita sumber. Wajib diisi.
 - "ringkasan": 1 sampai 2 kalimat faktual, hanya berdasarkan judul. Jangan menambah angka atau fakta yang tidak ada.
 - "dua_sisi": bila media Indonesia (ID) dan internasional (INTL) menyorot sudut berbeda untuk peristiwa yang sama, jelaskan dalam 1 kalimat: apa yang disorot media Indonesia dan apa yang disorot media internasional. Bila sudutnya sama atau hanya ada satu jenis media, string kosong.
-- "dampak": 0 sampai 2 hipotesis dampak lanjutan ke Indonesia, masing-masing {"teks": ..., "hari": jangka waktu 7 sampai 90}. Tulis sebagai hipotesis.
+- "dampak": 0 sampai 2 hipotesis dampak lanjutan ke Indonesia, masing-masing {"teks": ..., "hari": jangka waktu 7 sampai 90}. Tulis sebagai hipotesis yang SPESIFIK dan BISA DICEK dari berita atau data: sebut apa yang berubah, arahnya (naik/turun/melemah/menguat), dan bila wajar besarannya. Contoh baik: "Harga BBM nonsubsidi naik dalam 14 hari", "Rupiah melemah melewati Rp18.000 per dolar dalam 21 hari". Contoh buruk: "Dapat memengaruhi daya beli", "Investor mungkin berhati-hati".${riwayat ? '\n- Peristiwa ini sudah lampau. Pilih jangka waktu "hari" 7 sampai 21 agar hasilnya sudah bisa dicek sekarang.' : ''}
 - Seluruh teks dalam Bahasa Indonesia.
 Jawab HANYA dengan JSON tanpa teks lain, dengan bentuk:
 {"peristiwa":[{"judul":"","ringkasan":"","tingkat":"global|lokal","sektor":[],"indikator":[],"artikel":[1,2],"dua_sisi":"","dampak":[{"teks":"","hari":30}]}]}`;
