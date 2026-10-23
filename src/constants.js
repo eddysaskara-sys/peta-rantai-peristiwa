@@ -84,6 +84,12 @@ export const INDIKATOR_INDONESIA = ['Rupiah', 'IHSG', 'BI Rate'];
 // ("limit requests to one every 5 seconds") karena alamat IP Cloudflare dipakai bersama.
 // Kode pengambilnya tetap ada; isi daftar ini untuk mengaktifkannya kembali.
 export const GDELT_QUERIES = [];
+// Untuk isi riwayat, GDELT dipakai sebagai cadangan Google News: hanya 2 kueri per giliran, berjeda,
+// dengan rentang tanggal (startdatetime/enddatetime). Bila ditolak, giliran tetap memakai Google News.
+export const GDELT_RIWAYAT = [
+  '(minyak OR BBM OR rupiah OR inflasi OR "suku bunga" OR ekspor OR impor OR beras OR nikel) sourcecountry:indonesia',
+  '("oil prices" OR "federal reserve" OR tariffs OR shipping OR "food prices" OR Indonesia) sourcelang:english',
+];
 
 // 12 feed pertama sudah dicek aktif pada 21 Okt 2026. Feed tambahan diperiksa dari Cloudflare lewat
 // "Cek sumber berita" pada 23 Okt 2026: semuanya aktif (suara.com 404 dan mining.com 403 sudah dibuang).

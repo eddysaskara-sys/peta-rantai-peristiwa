@@ -1,5 +1,6 @@
 import {
   GDELT_QUERIES,
+  GDELT_RIWAYAT,
   RSS_FEEDS,
   MAX_LOKAL,
   MAX_INTERNASIONAL,
@@ -87,14 +88,19 @@ export async function collectHeadlines(opts = {}) {
 
   // GDELT membatasi kira-kira 1 permintaan per 5 detik per alamat IP. Alamat IP Cloudflare
   // dipakai bersama banyak pengguna, jadi diberi jeda lebih lama dan satu kali coba ulang.
-  const timespan = `${days}d`;
+  // Pembaruan biasa memakai GDELT_QUERIES (kosong); riwayat memakai GDELT_RIWAYAT sebagai cadangan.
+  const rentang = jendela
+    ? { start: gdeltTime(Date.parse(`${jendela.mulai}T00:00:00+07:00`)), end: gdeltTime(Date.parse(`${addDays(jendela.sampai, 1)}T00:00:00+07:00`) - 1000) }
+    : `${days}d`;
+  const queries = jendela ? GDELT_RIWAYAT : GDELT_QUERIES;
+  if (jendela) await gnewsPromise; // jangan menumpuk permintaan riwayat
   const gdelt = [];
-  for (let i = 0; !jendela && i < GDELT_QUERIES.length; i++) {
+  for (let i = 0; i < queries.length; i++) {
     if (i > 0) await sleep(7000);
     let items = null;
     for (let attempt = 0; attempt < 2 && items === null; attempt++) {
       try {
-        items = await fetchGdelt(GDELT_QUERIES[i], timespan);
+        items = await fetchGdelt(queries[i], rentang);
       } catch (e) {
         if (attempt === 0 && /limit requests|429/i.test(e.message)) {
           await sleep(12000);
@@ -177,11 +183,18 @@ export function originOf(host, fallback) {
   return fallback;
 }
 
-export async function fetchGdelt(query, timespan) {
+/** Waktu UTC dalam format GDELT (YYYYMMDDHHMMSS). */
+export function gdeltTime(ms) {
+  return new Date(ms).toISOString().replace(/[-:T]/g, '').slice(0, 14);
+}
+
+/** rentang: "3d" (timespan) atau { start, end } dalam format GDELT. */
+export async function fetchGdelt(query, rentang) {
+  const waktu = typeof rentang === 'string' ? `&timespan=${rentang}` : `&startdatetime=${rentang.start}&enddatetime=${rentang.end}`;
   const url =
     'https://api.gdeltproject.org/api/v2/doc/doc?query=' +
     encodeURIComponent(query) +
-    `&mode=artlist&format=json&maxrecords=50&timespan=${timespan}&sort=hybridrel`;
+    `&mode=artlist&format=json&maxrecords=${typeof rentang === 'string' ? 50 : 150}${waktu}&sort=hybridrel`;
   const r = await fetch(url, { headers: { 'User-Agent': UA } });
   const text = await r.text();
   if (!text.trim().startsWith('{')) throw new Error(text.slice(0, 120) || `HTTP ${r.status}`);

@@ -1,4 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
+// Jeda antar permintaan (Google News, GDELT) dipercepat agar tes tidak lama; urutannya tetap sama.
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...a) => realSetTimeout(fn, Math.min(ms || 0, 5), ...a);
 import { readFileSync } from 'node:fs';
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const worker = (await import(ROOT + '/src/index.js')).default;
@@ -75,7 +78,7 @@ const fxRates = {};
   while (days.length < 46) { d = new Date(d.getTime() + 86400e3); if (d.getUTCDay() % 6) days.push(d.toISOString().slice(0, 10)); }
   days.forEach((day, i) => { v = i === days.length - 1 ? v * 1.015 : v * (1 + (i % 2 ? 0.002 : -0.0018)); fxRates[day] = { IDR: Math.round(v) }; });
 }
-let marketDown = false, gnewsDaily = false, gnewsDown = false, fetchLog = [];
+let marketDown = false, gnewsDaily = false, gnewsDown = false, gdeltRiwayatDown = false, fetchLog = [];
 const dayStr = (ms) => new Date(ms).toISOString().slice(0, 10);
 const fredCsv = () => {
   let out = 'observation_date,DCOILBRENTEU\n';
@@ -120,6 +123,13 @@ globalThis.fetch = async (url, opts = {}) => {
   if (url.includes('api-ninjas')) {
     if ((opts.headers || {})['X-Api-Key'] !== 'kunci-uji') return new Response('{"error":"Invalid API Key."}', { status: 400 });
     return new Response(JSON.stringify({ price: 80, previous_close: 76, updated: Math.floor(Date.now() / 1000), type: 'brent' }));
+  }
+  if (url.includes('gdeltproject') && url.includes('startdatetime=')) {
+    if (gdeltRiwayatDown) return new Response('Please limit requests to one every 5 seconds', { status: 429 });
+    const st = /startdatetime=(\d{8})/.exec(url)[1];
+    const t = Date.UTC(+st.slice(0, 4), +st.slice(4, 6) - 1, +st.slice(6, 8)) + 30 * 3600e3;
+    const id = url.includes('sourcecountry%3Aindonesia');
+    return new Response(JSON.stringify({ articles: [{ url: `https://gdelt.contoh/${st}/${id ? 'id' : 'en'}`, title: id ? `Inflasi pangan naik ${st}` : `Fed signals pause ${st}`, seendate: new Date(t).toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z', domain: id ? 'kompas.com' : 'apnews.com', sourcecountry: id ? 'Indonesia' : 'United States' }] }));
   }
   if (url.includes('gdeltproject')) {
     if (url.includes('drought')) return new Response('Please limit requests to one every 5 seconds', { status: 429 });
@@ -450,6 +460,7 @@ const sigBefore = JSON.stringify((await call('GET', '/api/market'))[1].signals.m
 const mundurkanRiwayat = () => sq.prepare("UPDATE runs SET finished_at = ? WHERE trigger = 'riwayat' AND finished_at IS NOT NULL").run(new Date(Date.now() - 20 * 60e3).toISOString());
 // Google News menolak: jendela dijadwalkan ulang, bukan dianggap selesai.
 gnewsDown = true;
+gdeltRiwayatDown = true;
 fetchLog = [];
 const tolak = await tick();
 const rowTolak = sq.prepare('SELECT * FROM runs WHERE id = ?').get(tolak.runId);
@@ -458,6 +469,7 @@ ok(fetchLog.filter((u) => u.includes('news.google.com')).length === 3, 'berhenti
 ok(sq.prepare("SELECT COUNT(*) AS n FROM runs WHERE trigger = 'riwayat' AND status = 'antre' AND started_at <= ?").get(new Date().toISOString()).n === 0, 'semua giliran riwayat ikut menunggu (jeda bersama)');
 sq.prepare("UPDATE runs SET started_at = ? WHERE trigger = 'riwayat' AND status = 'antre' AND id != ?").run(new Date(Date.now() - 60e3).toISOString(), tolak.runId);
 gnewsDown = false;
+gdeltRiwayatDown = false;
 for (let i = 0; i < 3; i++) {
   mundurkanRiwayat();
   if (i === 2) sq.prepare("UPDATE runs SET started_at = ? WHERE id = ?").run(new Date(Date.now() - 60e3).toISOString(), tolak.runId);
@@ -472,6 +484,7 @@ const rwEvents = sq.prepare("SELECT e.* FROM events e JOIN runs r ON r.id = e.ru
 ok(rwEvents.length === sq.prepare('SELECT COUNT(*) AS n FROM events').get().n - nEvBefore && rwEvents.every((e) => e.tanggal >= mulai && e.tanggal < today), 'peristiwa riwayat bertanggal di dalam jendelanya');
 const rwArts = sq.prepare("SELECT a.* FROM articles a JOIN runs r ON r.id = a.run_id WHERE r.trigger = 'riwayat'").all();
 ok(rwArts.length > 0 && !rwArts.some((a) => a.title.startsWith('Berita sesudah jendela')), 'berita di luar jendela riwayat dibuang walau dikirim Google News');
+ok(rwArts.some((a) => a.url.startsWith('https://gdelt.contoh/')), 'riwayat juga memakai GDELT dengan rentang tanggal sebagai cadangan');
 ok(rwArts.some((a) => a.origin === 'lokal' && a.source === 'industri.kontan.co.id') && rwArts.some((a) => a.origin === 'internasional' && a.source === 'reuters.com'), 'riwayat mengambil media lokal dan internasional lewat Google News');
 const sigAfter = JSON.stringify((await call('GET', '/api/market'))[1].signals.map((x) => [x.id, x.label]));
 ok(sigBefore === sigAfter, 'peristiwa riwayat tidak mengacaukan sinyal lonjakan berita hari ini');
