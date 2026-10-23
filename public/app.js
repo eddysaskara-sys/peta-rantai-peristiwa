@@ -9,6 +9,10 @@ const state = {
   withUsulan: false,
   rantaiKel: '',
   filters: { tingkat: '', kelompok: '', q: '', days: 30 },
+  fcFilter: 'semua',
+  fcOpen: new Set(),
+  guideMode: '',
+  riwayatShown: 10,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -65,6 +69,13 @@ function store(key, val) {
 function load(key) {
   try { return sessionStorage.getItem(key) || ''; } catch (e) { return ''; }
 }
+// Penanda yang bertahan antar kunjungan (mis. panduan sudah dilihat). Aman bila penyimpanan diblokir.
+function keep(key, val) {
+  try { localStorage.setItem(key, val); } catch (e) { /* abaikan */ }
+}
+function kept(key) {
+  try { return localStorage.getItem(key) || ''; } catch (e) { return ''; }
+}
 
 async function api(path, opts = {}) {
   const headers = { 'content-type': 'application/json' };
@@ -105,6 +116,11 @@ async function loadStatus() {
   const badge = $('#badge');
   badge.hidden = !(state.owner && sisa);
   badge.textContent = sisa;
+  const perlu = state.status.counts?.forecasts_due || 0;
+  const bfc = $('#badge-fc');
+  bfc.hidden = !(state.owner && perlu);
+  bfc.textContent = perlu;
+  bfc.title = 'Perkiraan yang perlu keputusan Anda';
 }
 
 $('#owner-btn').addEventListener('click', () => {
@@ -148,7 +164,7 @@ function go(tab, opts = {}) {
   document.querySelectorAll('.tab').forEach((b) => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
   const hash = tab === 'rantai' && state.chainId ? `#rantai/${state.chainId}` : `#${tab}`;
   if (location.hash !== hash) history.replaceState(null, '', hash);
-  const fn = { tinjau: renderTinjau, linimasa: renderLinimasa, rantai: renderRantai, sektor: renderSektor, perkiraan: renderPerkiraan }[tab];
+  const fn = { tinjau: renderTinjau, linimasa: renderLinimasa, rantai: renderRantai, sektor: renderSektor, perkiraan: renderPerkiraan, panduan: renderPanduan }[tab];
   view.innerHTML = '<p class="loading">Memuat…</p>';
   fn().catch((e) => (view.innerHTML = `<div class="empty"><strong>Tidak bisa memuat bagian ini.</strong>${esc(e.message)}</div>`));
   if (opts.focus) view.focus();
@@ -187,16 +203,32 @@ async function renderTinjau() {
         </div>
       </div>
       <p id="run-msg" class="muted small" style="margin-top:8px"></p>
+      ${cekSumberHtml(d.cekSumber)}
     </section>
 
     <section class="section">
       <div class="section-head"><h2>Peristiwa dari pembaruan terakhir</h2><span class="muted small">${d.fresh.length} peristiwa</span></div>
       <p class="lead">Arsipkan peristiwa yang tidak relevan agar tidak ikut dikaitkan.</p>
       <div id="fresh">${d.fresh.length ? d.fresh.map((e) => freshHtml(e)).join('') : '<div class="empty">Belum ada peristiwa.</div>'}</div>
-    </section>`;
+    </section>
+
+    ${riwayatHtml(d)}`;
 
   state.review = d;
   $('#run-btn').addEventListener('click', runNow);
+  bindRiwayat(d);
+  $('#cs-btn').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget;
+    b.disabled = true;
+    try {
+      await api('/api/sumber/cek', { method: 'POST' });
+      b.textContent = 'Masuk antrean…';
+      $('#cs-msg').textContent = 'Sumber diperiksa paling lambat 5 menit lagi, tanpa memakai kuota AI. Buka lagi bagian ini untuk melihat hasilnya.';
+    } catch (e) {
+      b.disabled = false;
+      toast(e.message);
+    }
+  });
   if (run && (run.status === 'antre' || run.status === 'berjalan')) waitForRun(run.id);
   view.querySelectorAll('[data-link-action]').forEach((b) => b.addEventListener('click', decideLink));
   view.querySelectorAll('[data-archive]').forEach((b) => b.addEventListener('click', archiveEvent));
@@ -215,7 +247,7 @@ function proposalsBody(d) {
   return '<div class="empty"><strong>Tidak ada usulan yang menunggu.</strong>Usulan baru muncul setelah pembaruan berikutnya.</div>';
 }
 
-function proposalHtml(p) {
+function proposalHtml(p, riwayat = false) {
   const endBtn = (id, judul) => `<button class="linklike plainbtn" type="button" data-open="${id}">${esc(judul)}</button>`;
   const sisi = (txt) => (txt ? ' <span class="chip sisi" title="Media Indonesia dan internasional menyorot sudut berbeda">⚖️</span>' : '');
   return `<article class="proposal" id="p-${p.id}">
@@ -229,12 +261,12 @@ function proposalHtml(p) {
     <p class="reason">${esc(p.alasan)}</p>
     ${p.alasan_prioritas && p.alasan_prioritas.length
       ? `<ul class="why">${p.alasan_prioritas.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>`
-      : '<p class="why-none muted small">Tidak memenuhi kriteria prioritas; tampil karena slot malam ini masih ada.</p>'}
+      : `<p class="why-none muted small">${riwayat ? 'Tidak memenuhi kriteria prioritas.' : 'Tidak memenuhi kriteria prioritas; tampil karena slot malam ini masih ada.'}</p>`}
     <div class="proposal-actions">
       <span class="conf">Keyakinan AI ${Math.round((p.keyakinan || 0) * 100)}%</span>
       <span style="display:flex;gap:8px">
-        <button class="btn no" type="button" data-link-action="ditolak" data-id="${p.id}">Tolak</button>
-        <button class="btn ok" type="button" data-link-action="disetujui" data-id="${p.id}">Setujui</button>
+        <button class="btn no" type="button" data-link-action="ditolak" data-id="${p.id}"${riwayat ? ' data-riwayat="1"' : ''}>Tolak</button>
+        <button class="btn ok" type="button" data-link-action="disetujui" data-id="${p.id}"${riwayat ? ' data-riwayat="1"' : ''}>Setujui</button>
       </span>
     </div>
   </article>`;
@@ -249,6 +281,88 @@ function freshHtml(e) {
       <div style="margin-top:8px"><button class="btn ghost small-btn" type="button" data-archive="${e.id}">Arsipkan</button></div>
     </div>
   </div>`;
+}
+
+// ---------- Cek sumber berita (tanpa AI) ----------
+function cekSumberHtml(run) {
+  const head = `<div class="cs-row"><button class="btn ghost small-btn" id="cs-btn" type="button">Cek sumber berita</button>
+    <span class="muted small" id="cs-msg">Memeriksa setiap media dan topik: berapa judul yang didapat dan mana yang gagal. Tidak memakai kuota AI.</span></div>`;
+  if (!run) return head;
+  if (run.status === 'antre' || run.status === 'berjalan') return head.replace('id="cs-msg">', 'id="cs-msg">Pemeriksaan sumber sedang diproses. ');
+  const note = run.note || '';
+  const ok = [];
+  const gagal = [];
+  note.split('\n').forEach((line) => {
+    if (line.startsWith('Berita per sumber: ')) line.slice(19).split(', ').forEach((x) => x && ok.push(x));
+    if (line.startsWith('Sumber gagal: ')) gagal.push(line.slice(14));
+  });
+  const kosong = ok.filter((x) => / 0$/.test(x));
+  const isi = ok.filter((x) => !/ 0$/.test(x));
+  const harga = (note.split('\n').find((l) => l.startsWith('Harga pasar:')) || '').replace('Harga pasar: ', '');
+  return `${head}
+    <details class="cs-result"><summary>Hasil cek sumber ${waktu(run.finished_at || run.started_at)}: ${isi.length} sumber berisi, ${kosong.length} kosong, ${gagal.length} gagal</summary>
+      ${gagal.length ? `<p class="small"><b>Gagal</b></p><ul class="cs-list bad">${gagal.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+      ${kosong.length ? `<p class="small"><b>Tersambung tetapi kosong</b></p><ul class="cs-list">${kosong.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+      <p class="small"><b>Berhasil</b></p><ul class="cs-list">${isi.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+      ${harga ? `<p class="small" style="margin-top:8px"><b>Data harga:</b> ${esc(harga)}</p>` : ''}
+    </details>`;
+}
+
+// ---------- Isi riwayat ----------
+function riwayatHtml(d) {
+  const st = d.riwayatStatus;
+  const today = state.status.today;
+  const jendela = state.status.riwayatJendela || 4;
+  let prog = '<p>Riwayat belum pernah diisi.</p>';
+  if (st) {
+    const jalan = st.antre + st.berjalan;
+    prog = `<p><b>${st.selesai} dari ${st.total} giliran selesai</b> (${tgl(st.mulai)} – ${tgl(st.sampai)}): ${st.peristiwa} peristiwa, ${st.kaitan} usulan kaitan.${st.gagal ? ` ${st.gagal} giliran gagal; tekan "Isi riwayat" lagi untuk mengulanginya.` : ''}</p>
+      ${jalan ? `<p class="muted small">${jalan} giliran menunggu. Satu giliran diproses tiap ±5 menit selama kuota AI hari ini masih cukup; bila kuota menipis, dilanjutkan besok.</p>` : ''}`;
+  }
+  const r = d.riwayat || { pending: [], total: 0 };
+  const shown = r.pending.slice(0, state.riwayatShown);
+  return `<section class="section" id="riwayat">
+    <div class="section-head"><h2>Riwayat</h2><span class="muted small">diambil ${jendela} hari per giliran</span></div>
+    <p class="lead">Isi peristiwa sebelum aplikasi dipakai (mis. sejak awal Oktober) dari arsip berita Google News, lengkap dengan usulan kaitan ke rantai dan contoh perkiraan yang bisa dicek apakah sudah terjadi.</p>
+    <div class="run-box">
+      <div>${prog}</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label class="small" for="rw-mulai" style="margin:0">Mulai</label>
+        <input type="date" id="rw-mulai" value="${st?.mulai || '2026-10-01'}" max="${today}">
+        <button class="btn primary" id="rw-btn" type="button">Isi riwayat</button>
+      </div>
+    </div>
+    <p id="rw-msg" class="muted small" style="margin-top:8px"></p>
+    <div class="section-head" style="margin-top:20px"><h3>Usulan kaitan dari riwayat (<span id="rw-count">${r.total}</span>)</h3><span class="muted small">Tidak memakai jatah ${d.maks} usulan per malam</span></div>
+    <div id="rw-proposals">${shown.length ? shown.map((p) => proposalHtml(p, true)).join('') : '<div class="empty">Belum ada usulan dari riwayat.</div>'}</div>
+    ${r.pending.length > shown.length ? `<button class="btn ghost" id="rw-more" type="button">Tampilkan 10 berikutnya</button>` : ''}
+  </section>`;
+}
+
+function bindRiwayat(d) {
+  $('#rw-btn').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget;
+    b.disabled = true;
+    try {
+      const r = await api('/api/riwayat', { method: 'POST', body: JSON.stringify({ mulai: $('#rw-mulai').value }) });
+      if (!r.ok) throw new Error(r.message || 'Gagal.');
+      $('#rw-msg').textContent = r.jendela
+        ? `${r.jendela} giliran masuk antrean (${tgl(r.mulai)} – ${tgl(r.sampai)}). Hasilnya muncul bertahap; contoh perkiraan dicek AI setelah semua giliran selesai.`
+        : `Rentang ${tgl(r.mulai)} – ${tgl(r.sampai)} sudah diisi atau sedang antre.`;
+    } catch (e) {
+      $('#rw-msg').textContent = e.message;
+    }
+    b.disabled = false;
+  });
+  const more = $('#rw-more');
+  if (more) more.addEventListener('click', () => {
+    state.riwayatShown += 10;
+    const box = $('#rw-proposals');
+    box.innerHTML = d.riwayat.pending.slice(0, state.riwayatShown).map((p) => proposalHtml(p, true)).join('');
+    box.querySelectorAll('[data-link-action]').forEach((b) => b.addEventListener('click', decideLink));
+    box.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openEvent(Number(b.dataset.open))));
+    if (state.riwayatShown >= d.riwayat.pending.length) more.remove();
+  });
 }
 
 let pollTimer;
@@ -308,6 +422,15 @@ async function decideLink(e) {
     await api(`/api/links/${id}`, { method: 'POST', body: JSON.stringify({ status }) });
     $(`#p-${id}`).remove();
     const d = state.review;
+    if (b.dataset.riwayat) {
+      d.riwayat.pending = d.riwayat.pending.filter((p) => String(p.id) !== String(id));
+      d.riwayat.total -= 1;
+      const c = $('#rw-count');
+      if (c) c.textContent = d.riwayat.total;
+      toast(status === 'disetujui' ? 'Kaitan riwayat disetujui dan tampil di Rantai.' : 'Kaitan riwayat ditolak.');
+      loadStatus();
+      return;
+    }
     if (d) {
       d.pending = d.pending.filter((p) => String(p.id) !== String(id));
       d.sudah += 1;
@@ -433,8 +556,8 @@ async function openEvent(id) {
       ${e.dua_sisi ? `<div class="detail-block sisi-block"><h3>⚖️ Dua sisi pemberitaan</h3><p>${esc(e.dua_sisi)}</p><p class="muted small" style="margin-top:6px">Bandingkan sendiri lewat sumber media Indonesia dan internasional di bawah.</p></div>` : ''}
       <div class="detail-block"><h3>Kaitan</h3>${d.links.length ? `<ul class="plain">${d.links.map(linkItem).join('')}</ul>` : '<p class="muted">Belum ada kaitan yang disetujui.</p>'}</div>
       ${e.dampak.length ? `<div class="detail-block"><h3>Dampak yang mungkin terjadi</h3><p class="muted small" style="margin-bottom:8px">Hipotesis AI, bukan kepastian.</p>
-        ${e.dampak.map((h, i) => `<div class="hyp"><p>${esc(h.teks)}</p><p class="muted small">Perkiraan dalam ±${h.hari} hari</p>${state.owner ? `<button type="button" class="btn ghost small-btn" data-hyp="${i}" style="margin-top:6px">Catat sebagai perkiraan</button>` : ''}</div>`).join('')}</div>` : ''}
-      ${d.forecasts.length ? `<div class="detail-block"><h3>Perkiraan tercatat</h3>${d.forecasts.map((f) => `<div class="hyp"><p>${esc(f.teks)}</p><p class="muted small">Dicek ${tgl(f.tanggal_cek)} · ${statusFc(f.status)}</p></div>`).join('')}</div>` : ''}
+        ${e.dampak.map((h, i) => `<div class="hyp"><p>${esc(h.teks)}</p><p class="muted small">Perkiraan dalam ±${h.hari} hari</p>${state.owner ? hypBtn(d.forecasts.some((f) => f.teks === h.teks), `data-hyp="${i}"`) : ''}</div>`).join('')}</div>` : ''}
+      ${d.forecasts.length ? `<div class="detail-block"><h3>Perkiraan tercatat</h3>${d.forecasts.map((f) => `<div class="hyp"><p>${esc(f.teks)}</p><p class="muted small">Dicek ${tgl(f.tanggal_cek)} · ${statusFc(f)}</p></div>`).join('')}<button type="button" class="btn ghost small-btn" id="to-fc">Buka di Perkiraan</button></div>` : ''}
       <div class="detail-block"><h3>Sumber berita</h3><ul class="plain sources">${d.articles.map((a) => `<li><a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a><br><span class="src">${esc(a.source)} · ${a.origin === 'lokal' ? 'media Indonesia' : 'media internasional'}${a.published_at ? ' · ' + waktu(a.published_at) : ''}</span></li>`).join('')}</ul></div>`;
     $('#see-chain').addEventListener('click', () => { closeDrawer(); go('rantai', { chainId: id, focus: true }); });
     bodyEl.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openEvent(Number(b.dataset.open))));
@@ -447,11 +570,10 @@ async function openEvent(id) {
     });
     bodyEl.querySelectorAll('[data-hyp]').forEach((b) => b.addEventListener('click', async () => {
       const h = e.dampak[Number(b.dataset.hyp)];
-      b.disabled = true;
-      await api('/api/forecasts', { method: 'POST', body: JSON.stringify({ event_id: id, teks: h.teks, hari: h.hari }) });
-      b.textContent = 'Tercatat di Perkiraan';
-      toast('Perkiraan dicatat.');
+      await saveHyp(b, { event_id: id, teks: h.teks, hari: h.hari });
     }));
+    const toFc = $('#to-fc');
+    if (toFc) toFc.addEventListener('click', () => { closeDrawer(); go('perkiraan'); });
   } catch (err) {
     bodyEl.innerHTML = `<div class="empty"><strong>Tidak bisa membuka peristiwa.</strong>${esc(err.message)}</div>`;
   }
@@ -515,8 +637,17 @@ async function renderRantaiUtama() {
       : `<div class="banner calm"><p>Tinjauan malam ini selesai (${t.sudah}/${t.maks}).${t.kolam ? ` ${t.kolam} usulan lain bersaing lagi besok.` : ''}</p></div>`)
     : '';
   const kelBtn = (id, nama) => `<button type="button" class="fchip" data-kel="${id}" aria-pressed="${kel === id}">${esc(nama)}</button>`;
+  const baru = !state.owner && !kept('panduan-dilihat')
+    ? `<div class="banner hint" id="hint"><p><b>Baru pertama kali di sini?</b> Baca Panduan singkat (± 2 menit) untuk tahu cara membaca rantai dan perkiraan.</p>
+        <span style="display:flex;gap:8px"><button type="button" class="btn ghost small-btn" id="hint-close">Tutup</button><button type="button" class="btn primary small-btn" id="hint-open">Buka Panduan</button></span></div>`
+    : '';
+  const riw = state.owner && t && t.riwayat
+    ? `<p class="muted small" style="margin:-12px 0 20px">Ada juga ${t.riwayat} usulan dari riwayat di Tinjau (tidak memakai jatah malam ini).</p>`
+    : '';
   view.innerHTML = `
+    ${baru}
     ${banner}
+    ${riw}
     <div class="section-head"><h2>Rantai sebab-akibat</h2><span class="muted small">${d.total} rantai · 90 hari terakhir</span></div>
     <p class="lead">Setiap rantai berawal dari penyebab paling awal. Pilih satu untuk melihat seluruh perambatannya.</p>
     <div class="fchips" role="group" aria-label="Saring per kelompok sektor">${kelBtn('', 'Semua')}${st.kelompok.map((k) => kelBtn(k.id, k.nama)).join('')}</div>
@@ -524,6 +655,11 @@ async function renderRantaiUtama() {
     ${pulseHtml(st.signals, false)}`;
   const gt = $('#go-tinjau');
   if (gt) gt.addEventListener('click', () => go('tinjau'));
+  const ho = $('#hint-open');
+  if (ho) {
+    ho.addEventListener('click', () => go('panduan'));
+    $('#hint-close').addEventListener('click', () => { keep('panduan-dilihat', '1'); $('#hint').remove(); });
+  }
   view.querySelectorAll('[data-kel]').forEach((b) => b.addEventListener('click', () => { state.rantaiKel = b.dataset.kel; go('rantai'); }));
   view.querySelectorAll('[data-akar]').forEach((b) => b.addEventListener('click', () => go('rantai', { chainId: Number(b.dataset.akar), focus: true })));
 }
@@ -548,6 +684,26 @@ function chainCardHtml(c) {
   </button>`;
 }
 
+// Tombol "catat sebagai perkiraan"; nonaktif bila hipotesis itu sudah tercatat.
+function hypBtn(sudah, attr) {
+  return sudah
+    ? '<button type="button" class="btn ghost small-btn" disabled style="margin-top:6px">Sudah tercatat di Perkiraan</button>'
+    : `<button type="button" class="btn ghost small-btn" ${attr} style="margin-top:6px">Catat sebagai perkiraan</button>`;
+}
+
+async function saveHyp(b, payload) {
+  b.disabled = true;
+  try {
+    const r = await api('/api/forecasts', { method: 'POST', body: JSON.stringify(payload) });
+    b.textContent = 'Sudah tercatat di Perkiraan';
+    toast(r.sudah ? 'Perkiraan ini sudah ada di Perkiraan.' : 'Perkiraan dicatat dan otomatis masuk kelompoknya.');
+    loadStatus();
+  } catch (e) {
+    b.disabled = false;
+    toast(e.message);
+  }
+}
+
 // ---------- Perkiraan dari rantai ----------
 // Peristiwa yang dipakai sebagai titik berangkat perkiraan: fokus dan semua dampaknya.
 function chainNodes(f, d) {
@@ -566,15 +722,16 @@ function chainForecastHtml(f, d) {
   const nodes = chainNodes(f, d);
   const hyps = nodes.flatMap((ev) => (ev.dampak || []).map((h) => ({ ev, h })));
   const options = nodes.map((ev) => `<option value="${ev.id}">${esc(ev.judul)}</option>`).join('');
+  const sudah = (x) => (d.tercatat || []).some((t) => t.event_id === x.ev.id && t.teks === x.h.teks);
   return `
     <section class="section" id="chain-forecast">
       <div class="section-head"><h2>Perkiraan dari rantai ini</h2></div>
-      <p class="lead">Lanjutkan rantainya: apa dampak berikutnya yang Anda perkirakan? Catat sekarang, lalu tandai terjadi atau tidak di tab Perkiraan saat tanggal ceknya tiba.</p>
+      <p class="lead">Lanjutkan rantainya: apa dampak berikutnya yang Anda perkirakan? Catat sekarang; perkiraan otomatis masuk kelompok sektornya di tab Perkiraan, dicek AI saat tanggal ceknya tiba, lalu Anda yang memutuskan.</p>
       ${hyps.length
         ? hyps.map((x, i) => `<div class="hyp">
             <p>${esc(x.h.teks)}</p>
             <p class="muted small">Hipotesis AI dari: ${esc(x.ev.judul)}, perkiraan dalam ±${x.h.hari} hari</p>
-            ${state.owner ? `<button type="button" class="btn ghost small-btn" data-chyp="${i}" style="margin-top:6px">Catat sebagai perkiraan</button>` : ''}
+            ${state.owner ? hypBtn(sudah(x), `data-chyp="${i}"`) : ''}
           </div>`).join('')
         : '<p class="muted">AI belum memberi hipotesis dampak untuk peristiwa di rantai ini.</p>'}
       ${state.owner ? `
@@ -596,15 +753,7 @@ function bindChainForecast(f, d) {
   const hyps = nodes.flatMap((ev) => (ev.dampak || []).map((h) => ({ ev, h })));
   view.querySelectorAll('[data-chyp]').forEach((b) => b.addEventListener('click', async () => {
     const x = hyps[Number(b.dataset.chyp)];
-    b.disabled = true;
-    try {
-      await api('/api/forecasts', { method: 'POST', body: JSON.stringify({ event_id: x.ev.id, teks: x.h.teks, hari: x.h.hari }) });
-      b.textContent = 'Tercatat di Perkiraan';
-      toast('Perkiraan dicatat.');
-    } catch (e) {
-      b.disabled = false;
-      toast(e.message);
-    }
+    await saveHyp(b, { event_id: x.ev.id, teks: x.h.teks, hari: x.h.hari });
   }));
   const form = $('#own-fc');
   if (form) form.addEventListener('submit', async (e) => {
@@ -614,9 +763,9 @@ function bindChainForecast(f, d) {
     const btn = form.querySelector('button[type="submit"]');
     btn.disabled = true;
     try {
-      await api('/api/forecasts', { method: 'POST', body: JSON.stringify({ event_id: Number($('#fc-from').value), teks, hari: Number($('#fc-days').value) }) });
+      const r = await api('/api/forecasts', { method: 'POST', body: JSON.stringify({ event_id: Number($('#fc-from').value), teks, hari: Number($('#fc-days').value) }) });
       $('#fc-text').value = '';
-      toast('Perkiraan dicatat. Lihat di tab Perkiraan.');
+      toast(r.sudah ? 'Perkiraan ini sudah ada di Perkiraan.' : 'Perkiraan dicatat. Lihat di tab Perkiraan.');
     } catch (err) {
       toast(err.message);
     }
@@ -657,41 +806,314 @@ async function renderSektor() {
   }));
 }
 
-// ---------- Perkiraan ----------
-function statusFc(s) {
-  return { menunggu: 'menunggu dicek', terjadi: 'terjadi', tidak: 'tidak terjadi' }[s] || s;
+// ---------- Perkiraan (dikelompokkan, dengan saran AI) ----------
+const FC_LABEL = { perlu: 'Perlu keputusan', menunggu: 'Menunggu', terjadi: 'Terjadi', tidak: 'Tidak terjadi' };
+const SARAN_LABEL = { terjadi: 'Sudah terjadi', tidak: 'Tidak terjadi', belum: 'Belum ada bukti yang cukup', gagal: 'Pengecekan gagal' };
+
+function fcState(f) {
+  return f.status === 'menunggu' ? (f.perlu ? 'perlu' : 'menunggu') : f.status;
+}
+function statusFc(f) {
+  if (typeof f === 'string') return { menunggu: 'menunggu dicek', terjadi: 'terjadi', tidak: 'tidak terjadi' }[f] || f;
+  const base = { perlu: 'perlu keputusan pemilik', menunggu: 'menunggu dicek', terjadi: 'terjadi', tidak: 'tidak terjadi' }[fcState(f)];
+  return f.saran && f.status === 'menunggu' ? `${base} · saran AI: ${SARAN_LABEL[f.saran.status].toLowerCase()}` : base;
+}
+function fcMatch(f, filter) {
+  if (filter === 'perlu') return f.perlu;
+  if (filter === 'menunggu') return f.status === 'menunggu' && !f.perlu;
+  if (filter === 'selesai') return f.status !== 'menunggu';
+  return true;
+}
+function fcSort(a, b) {
+  const rank = { perlu: 0, menunggu: 1, terjadi: 2, tidak: 2 };
+  return rank[fcState(a)] - rank[fcState(b)]
+    || (a.status === 'menunggu' ? a.tanggal_cek.localeCompare(b.tanggal_cek) : String(b.diputuskan_at || '').localeCompare(String(a.diputuskan_at || '')))
+    || a.id - b.id;
+}
+const persen = (a, b) => (b ? Math.round((a / b) * 100) + '%' : '–');
+
+function buktiHtml(s) {
+  const b = s.bukti || {};
+  const berita = b.berita || [];
+  const dipakai = new Set((b.dipakai || []).map(Number));
+  const item = (a) => `<li><a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer">${esc(a.judul)}</a> <span class="src">${esc(a.sumber)}${a.tanggal ? ' · ' + tgl(a.tanggal) : ''}</span></li>`;
+  const utama = berita.filter((_, i) => dipakai.has(i + 1));
+  const lain = berita.filter((_, i) => !dipakai.has(i + 1));
+  return `${(b.harga || []).length ? `<ul class="bukti harga">${b.harga.map((h) => `<li>📈 ${esc(h)}</li>`).join('')}</ul>` : ''}
+    ${utama.length ? `<p class="small" style="margin-top:6px"><b>Bukti yang dipakai AI</b></p><ul class="bukti">${utama.map(item).join('')}</ul>` : ''}
+    ${lain.length ? `<details class="small"><summary>${lain.length} berita lain yang ikut diperiksa</summary><ul class="bukti">${lain.map(item).join('')}</ul></details>` : ''}
+    ${!berita.length && !(b.harga || []).length ? '<p class="muted small">Tidak ada berita atau data harga yang cocok sejak tanggal dasar.</p>' : ''}`;
+}
+
+function saranHtml(f) {
+  if (f.antre) return '<div class="saran wait"><p>🤖 <b>Menunggu pengecekan AI.</b> Diproses paling lambat 5 menit lagi.</p></div>';
+  const s = f.saran;
+  if (!s) return '';
+  const final = f.status !== 'menunggu';
+  const conf = s.keyakinan != null && ['terjadi', 'tidak'].includes(s.status) ? ` · keyakinan ${Math.round(s.keyakinan * 100)}%` : '';
+  const catatan = !final && ['terjadi', 'tidak'].includes(s.status)
+    ? `<p class="muted small" style="margin-top:6px">${state.owner ? 'Saran ini belum final. Periksa buktinya (atau cek sendiri), lalu putuskan.' : 'Saran ini menunggu konfirmasi pemilik.'}</p>`
+    : '';
+  return `<details class="saran ${s.status}" ${final ? '' : 'open'}>
+      <summary>🤖 <b>Saran AI: ${SARAN_LABEL[s.status] || s.status}</b>${conf} <span class="muted small">· dicek ${waktu(s.at)}</span></summary>
+      ${s.alasan ? `<p class="small" style="margin-top:6px">${esc(s.alasan)}</p>` : ''}
+      ${buktiHtml(s)}
+      ${catatan}
+    </details>`;
+}
+
+function keputusanHtml(f) {
+  if (f.status === 'menunggu') return '';
+  const s = f.saran && ['terjadi', 'tidak'].includes(f.saran.status) ? f.saran.status : null;
+  const cara = f.diputuskan_dengan === 'saran-ai' ? 'menyetujui saran AI' : s ? (s === f.status ? 'cek manual, sama dengan saran AI' : 'cek manual, berbeda dari saran AI') : 'cek manual';
+  return `<p class="muted small" style="margin-top:6px">Diputuskan pemilik${f.diputuskan_at ? ' ' + tgl(f.diputuskan_at.slice(0, 10)) : ''} · ${cara}${f.catatan ? ' · ' + esc(f.catatan) : ''}</p>`;
+}
+
+function fcActionsHtml(f) {
+  const lawan = { terjadi: 'tidak', tidak: 'terjadi' };
+  const btn = (cls, st, dengan, label) => `<button type="button" class="btn ${cls} small-btn" data-dec="${st}" data-dengan="${dengan}" data-id="${f.id}">${label}</button>`;
+  const cek = `<a class="btn ghost small-btn" href="${esc(safeUrl(f.cari))}" target="_blank" rel="noopener noreferrer" title="Cari berita terkait di Google News, di tab baru">Cek sendiri ↗</a>`;
+  const hapus = `<button type="button" class="btn ghost small-btn danger" data-del="${f.id}">Hapus</button>`;
+  if (f.status !== 'menunggu') {
+    return `<div class="fc-actions"><button type="button" class="btn ghost small-btn" data-dec="menunggu" data-dengan="" data-id="${f.id}">Batalkan keputusan</button>${hapus}</div>`;
+  }
+  const s = f.saran && ['terjadi', 'tidak'].includes(f.saran.status) ? f.saran.status : null;
+  const putus = s
+    ? btn('primary', s, 'saran-ai', `Setujui saran: ${FC_LABEL[s]}`) + btn(s === 'terjadi' ? 'no' : 'ok', lawan[s], 'manual', `Bukan, tandai ${FC_LABEL[lawan[s]].toLowerCase()}`)
+    : btn('ok', 'terjadi', 'manual', 'Terjadi') + btn('no', 'tidak', 'manual', 'Tidak terjadi');
+  const minta = f.antre ? '' : `<button type="button" class="btn ghost small-btn" data-cek="${f.id}">${f.saran ? 'Cek ulang dengan AI' : 'Minta saran AI'}</button>`;
+  return `<div class="fc-actions">${putus}${minta}${cek}${hapus}</div>`;
+}
+
+function fcItemHtml(f) {
+  const st = fcState(f);
+  return `<article class="fc ${st}" id="fc-${f.id}">
+    <div class="fc-top"><span class="fc-badge ${st}">${FC_LABEL[st]}</span>${f.asal === 'riwayat' ? '<span class="chip" title="Dicatat otomatis dari hipotesis AI saat mengisi riwayat">Contoh dari riwayat</span>' : ''}<span class="muted small">dicek ${tgl(f.tanggal_cek)}</span></div>
+    <p class="fc-text">${esc(f.teks)}</p>
+    <p class="muted small" style="margin-top:4px">Dari: <button type="button" class="linklike plainbtn" data-open="${f.event_id}">${esc(f.event_judul)}</button>${f.event_tanggal ? ` (${tgl(f.event_tanggal)})` : ''}</p>
+    ${saranHtml(f)}
+    ${keputusanHtml(f)}
+    ${state.owner ? fcActionsHtml(f) : ''}
+  </article>`;
 }
 
 async function renderPerkiraan() {
   const d = await api('/api/forecasts');
-  const today = d.today;
-  const due = d.forecasts.filter((f) => f.status === 'menunggu' && f.tanggal_cek <= today);
-  const wait = d.forecasts.filter((f) => f.status === 'menunggu' && f.tanggal_cek > today);
-  const done = d.forecasts.filter((f) => f.status !== 'menunggu');
-  const hit = done.filter((f) => f.status === 'terjadi').length;
-  const fc = (f, isDue) => `<div class="fc ${isDue ? 'due' : ''}">
-      <p>${esc(f.teks)}</p>
-      <p class="muted small" style="margin-top:4px">Dari: <button type="button" data-open="${f.event_id}" style="background:none;border:0;padding:0;color:inherit;font:inherit;cursor:pointer;text-decoration:underline">${esc(f.event_judul)}</button> · dicek ${tgl(f.tanggal_cek)} · ${statusFc(f.status)}</p>
-      ${state.owner && f.status === 'menunggu' ? `<div class="fc-actions"><button type="button" class="btn ok small-btn" data-fc="${f.id}" data-st="terjadi">Terjadi</button><button type="button" class="btn no small-btn" data-fc="${f.id}" data-st="tidak">Tidak terjadi</button></div>` : ''}
-    </div>`;
+  const r = d.ringkasan;
+  const filter = state.fcFilter;
+  const list = d.forecasts.filter((f) => fcMatch(f, filter));
+  const groups = d.kelompok
+    .map((k) => ({ ...k, all: d.forecasts.filter((f) => f.kelompok === k.id), items: list.filter((f) => f.kelompok === k.id).sort(fcSort) }))
+    .filter((g) => g.items.length);
+  const counts = { semua: r.total, perlu: r.perlu, menunggu: r.menunggu, selesai: r.selesai };
+  const chip = (id, label) => `<button type="button" class="fchip" data-fcf="${id}" aria-pressed="${filter === id}">${label} <span class="muted">${counts[id]}</span></button>`;
+  const groupHtml = (g) => {
+    const perlu = g.all.filter((f) => f.perlu).length;
+    const sel = g.all.filter((f) => f.status !== 'menunggu');
+    const hit = sel.filter((f) => f.status === 'terjadi').length;
+    const open = perlu || filter !== 'semua' || state.fcOpen.has(g.id) || groups.length === 1;
+    return `<details class="fc-group" data-kel="${g.id}" ${open ? 'open' : ''}>
+      <summary><span class="g-name">${esc(g.nama)}</span>
+        <span class="g-meta">${g.all.length} perkiraan${perlu ? ` · <b class="g-hot">${perlu} perlu keputusan</b>` : ''}${sel.length ? ` · terbukti ${hit}/${sel.length}` : ''}</span></summary>
+      <div class="g-body">${g.items.map(fcItemHtml).join('')}</div>
+    </details>`;
+  };
   view.innerHTML = `
-    <p class="lead">Perkiraan dampak yang dicatat dari peristiwa. Saat tanggal ceknya tiba, tandai terjadi atau tidak untuk melihat seberapa tepat penalaran kita.</p>
-    <section class="section">
-      <div class="section-head"><h2>Ketepatan</h2></div>
-      ${done.length ? `<p><span class="score">${Math.round((hit / done.length) * 100)}%</span> <span class="muted">${hit} dari ${done.length} perkiraan terbukti</span></p>` : '<p class="muted">Belum ada perkiraan yang selesai dicek.</p>'}
-    </section>
-    <section class="section"><div class="section-head"><h2>Waktunya dicek</h2><span class="muted small">${due.length}</span></div>
-      ${due.length ? due.map((f) => fc(f, true)).join('') : '<p class="muted">Tidak ada yang jatuh tempo.</p>'}</section>
-    <section class="section"><div class="section-head"><h2>Menunggu</h2><span class="muted small">${wait.length}</span></div>
-      ${wait.length ? wait.map((f) => fc(f)).join('') : `<p class="muted">${state.owner ? 'Buka tab Rantai, pilih satu peristiwa, lalu catat perkiraan di bagian "Perkiraan dari rantai ini". Bisa juga dari panel detail peristiwa.' : 'Belum ada perkiraan.'}</p>`}</section>
-    ${done.length ? `<section class="section"><div class="section-head"><h2>Selesai</h2></div>${done.map((f) => fc(f)).join('')}</section>` : ''}`;
-  view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openEvent(Number(b.dataset.open))));
-  view.querySelectorAll('[data-fc]').forEach((b) => b.addEventListener('click', async () => {
-    b.disabled = true;
-    await api(`/api/forecasts/${b.dataset.fc}`, { method: 'POST', body: JSON.stringify({ status: b.dataset.st }) });
-    toast(b.dataset.st === 'terjadi' ? 'Ditandai terjadi.' : 'Ditandai tidak terjadi.');
-    go('perkiraan');
+    <p class="lead">Perkiraan dampak yang dicatat dari peristiwa, dikelompokkan otomatis menurut sektor yang dibicarakan. AI membantu mengecek apakah perkiraan sudah terjadi, tetapi keputusan akhir selalu di tangan pemilik.</p>
+    <div class="fc-summary">
+      <div class="stat"><span class="num">${persen(r.terjadi, r.selesai)}</span><span>ketepatan · ${r.terjadi} dari ${r.selesai} terbukti</span></div>
+      <div class="stat"><span class="num">${r.banding ? `${r.sepakat}/${r.banding}` : '–'}</span><span>AI sependapat dengan keputusan pemilik</span></div>
+      <div class="stat${r.perlu ? ' hot' : ''}"><span class="num">${r.perlu}</span><span>perlu keputusan</span></div>
+      <div class="stat"><span class="num">${r.menunggu}</span><span>menunggu tanggal cek</span></div>
+    </div>
+    <div class="fchips" role="group" aria-label="Saring perkiraan">${chip('semua', 'Semua')}${chip('perlu', 'Perlu keputusan')}${chip('menunggu', 'Menunggu')}${chip('selesai', 'Selesai')}</div>
+    ${groups.length ? groups.map(groupHtml).join('') : `<div class="empty"><strong>${filter === 'semua' ? 'Belum ada perkiraan.' : 'Tidak ada perkiraan di saringan ini.'}</strong>${filter === 'semua' ? (state.owner ? 'Buka tab Rantai, pilih satu peristiwa, lalu catat perkiraan di bagian "Perkiraan dari rantai ini".' : 'Perkiraan muncul setelah pemilik mencatatnya.') : 'Pilih "Semua" untuk melihat seluruh perkiraan.'}</div>`}`;
+
+  view.querySelectorAll('[data-fcf]').forEach((b) => b.addEventListener('click', () => { state.fcFilter = b.dataset.fcf; go('perkiraan'); }));
+  view.querySelectorAll('.fc-group').forEach((el) => el.addEventListener('toggle', () => {
+    if (el.open) state.fcOpen.add(el.dataset.kel);
+    else state.fcOpen.delete(el.dataset.kel);
   }));
+  view.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openEvent(Number(b.dataset.open))));
+  view.querySelectorAll('[data-dec]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await api(`/api/forecasts/${b.dataset.id}`, { method: 'POST', body: JSON.stringify({ status: b.dataset.dec, dengan: b.dataset.dengan }) });
+      toast({ terjadi: 'Ditandai terjadi.', tidak: 'Ditandai tidak terjadi.', menunggu: 'Keputusan dibatalkan.' }[b.dataset.dec]);
+      await loadStatus();
+      go('perkiraan');
+    } catch (e) {
+      b.disabled = false;
+      toast(e.message);
+    }
+  }));
+  view.querySelectorAll('[data-cek]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await api(`/api/forecasts/${b.dataset.cek}/cek`, { method: 'POST' });
+      toast('Masuk antrean pengecekan AI (paling lambat 5 menit).');
+      go('perkiraan');
+    } catch (e) {
+      b.disabled = false;
+      toast(e.message);
+    }
+  }));
+  view.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('Hapus perkiraan ini? Tindakan ini tidak bisa dibatalkan.')) return;
+    b.disabled = true;
+    try {
+      await api(`/api/forecasts/${b.dataset.del}/hapus`, { method: 'POST' });
+      toast('Perkiraan dihapus.');
+      await loadStatus();
+      go('perkiraan');
+    } catch (e) {
+      b.disabled = false;
+      toast(e.message);
+    }
+  }));
+}
+
+// ---------- Panduan ----------
+function renderPanduan() {
+  keep('panduan-dilihat', '1');
+  const mode = state.guideMode || (state.owner ? 'pemilik' : 'pengunjung');
+  const st = state.status;
+  const src = st.sumber || {};
+  const tab = (id, label) => `<button type="button" data-guide="${id}" aria-pressed="${mode === id}">${label}</button>`;
+  view.innerHTML = `
+    <section class="guide">
+      <h2>Panduan</h2>
+      <p class="lead" style="margin-top:8px">Aplikasi ini adalah <b>peta sebab-akibat</b>: ia menunjukkan bagaimana satu kejadian, misalnya konflik di jalur kapal minyak, merambat menjadi kejadian lain sampai ke Indonesia, misalnya harga BBM atau nilai rupiah. Ini alat bantu berpikir, <b>bukan saran beli atau jual</b>.</p>
+      <div class="seg" role="group" aria-label="Pilih panduan">${tab('pengunjung', 'Untuk pengunjung (tanpa PIN)')}${tab('pemilik', 'Untuk pemilik (dengan PIN)')}</div>
+      <div class="guide-body">${mode === 'pemilik' ? panduanPemilik() : panduanPengunjung(src)}</div>
+    </section>`;
+  view.querySelectorAll('[data-guide]').forEach((b) => b.addEventListener('click', () => { state.guideMode = b.dataset.guide; renderPanduan(); }));
+  view.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => go(b.dataset.goto)));
+  return Promise.resolve();
+}
+
+function panduanPengunjung(src) {
+  const goto = (tab, label) => `<button type="button" class="linklike plainbtn" data-goto="${tab}">${label}</button>`;
+  return `
+    <div class="guide-card">
+      <h3>Mulai dalam 3 langkah</h3>
+      <ol class="steps">
+        <li>Buka ${goto('rantai', '<b>Rantai</b>')}. Setiap kartu adalah satu rantai: baris paling atas adalah <b>penyebab paling awal</b>, baris di bawahnya adalah akibatnya. Klik kartu untuk melihat rantai lengkapnya.</li>
+        <li>Di layar rantai, klik <b>Sumber dan detail</b> untuk membaca berita aslinya. Setiap peristiwa punya tautan ke media sumbernya, jadi Anda bisa memeriksanya sendiri.</li>
+        <li>Buka ${goto('perkiraan', '<b>Perkiraan</b>')} untuk melihat apa yang diperkirakan terjadi berikutnya, dan mana yang sudah terbukti.</li>
+      </ol>
+    </div>
+    <div class="guide-card">
+      <h3>Arti tanda-tanda</h3>
+      <dl class="legend-list">
+        <dt>${lvl('global')} / ${lvl('lokal')}</dt><dd>Kejadian di luar Indonesia (global) atau di Indonesia (lokal).</dd>
+        <dt>menyebabkan</dt><dd>Kejadian pertama menimbulkan kejadian berikutnya.</dd>
+        <dt>memperkuat</dt><dd>Kejadian pertama membuat kejadian berikutnya makin besar.</dd>
+        <dt>meredam</dt><dd>Kejadian pertama mengurangi dampak kejadian berikutnya.</dd>
+        <dt>memicu respons</dt><dd>Kejadian pertama membuat pihak lain bereaksi, misalnya pemerintah atau bank sentral mengambil kebijakan.</dd>
+        <dt><span class="chip kel">Energi</span></dt><dd>Kelompok sektor yang terdampak. Ada 6 kelompok: Pangan & Agribisnis, Energi, Tambang & Mineral, Industri & Konsumsi, Keuangan & Moneter, Perdagangan & Logistik.</dd>
+        <dt><span class="chip sisi">⚖️ Sudut berbeda</span></dt><dd>Media Indonesia dan media internasional menyoroti hal yang berbeda dari kejadian yang sama.</dd>
+        <dt>Bergerak</dt><dd>Kelompok sektor yang hari ini bergerak tidak seperti biasanya, dilihat dari harga atau lonjakan berita.</dd>
+        <dt>🤖 Saran AI</dt><dd>Hasil pengecekan otomatis apakah sebuah perkiraan sudah terjadi. Belum final sampai pemilik memutuskan.</dd>
+      </dl>
+    </div>
+    <div class="guide-card">
+      <h3>Isi setiap menu</h3>
+      <dl class="legend-list">
+        <dt>${goto('rantai', 'Rantai')}</dt><dd>Layar utama. Rantai sebab-akibat yang sudah diperiksa pemilik. Bisa disaring per kelompok sektor.</dd>
+        <dt>${goto('linimasa', 'Linimasa')}</dt><dd>Semua peristiwa per tanggal, termasuk yang belum masuk rantai. Bisa dicari, misalnya "minyak".</dd>
+        <dt>${goto('sektor', 'Sektor')}</dt><dd>Ringkasan 6 kelompok sektor dalam 30 hari terakhir, dan kelompok mana yang sedang bergerak.</dd>
+        <dt>${goto('perkiraan', 'Perkiraan')}</dt><dd>Perkiraan dampak, dikelompokkan per sektor. Pakai saringan "Perlu keputusan", "Menunggu", atau "Selesai". Angka ketepatan menunjukkan berapa perkiraan yang terbukti.</dd>
+      </dl>
+    </div>
+    <div class="guide-card">
+      <h3>Yang perlu diketahui</h3>
+      <ul class="steps">
+        <li>Anda hanya bisa melihat. Tidak ada tombol yang bisa mengubah data, jadi silakan klik apa saja.</li>
+        <li>Data diperbarui otomatis setiap hari pukul 17.30 WIB.</li>
+        <li>Peristiwa disusun AI dari judul berita, jadi bisa keliru. Selalu cek sumber aslinya.</li>
+        <li>Kaitan sebab-akibat baru tampil di Rantai setelah disetujui pemilik.</li>
+        <li>Bila halaman tidak terbuka dari jaringan tertentu, aktifkan DNS Cloudflare 1.1.1.1 di perangkat Anda.</li>
+      </ul>
+    </div>
+    <div class="guide-card">
+      <h3>Istilah singkat</h3>
+      <dl class="legend-list">
+        <dt>BI Rate</dt><dd>Suku bunga acuan Bank Indonesia. Naik-turunnya memengaruhi bunga kredit dan nilai rupiah.</dd>
+        <dt>The Fed</dt><dd>Bank sentral Amerika Serikat. Kebijakannya memengaruhi arus dana ke negara berkembang, termasuk Indonesia.</dd>
+        <dt>Brent</dt><dd>Harga minyak mentah acuan dunia.</dd>
+        <dt>IHSG</dt><dd>Indeks harga saham gabungan di Bursa Efek Indonesia.</dd>
+        <dt>USD/IDR</dt><dd>Kurs rupiah terhadap dolar AS. Angka naik berarti rupiah melemah.</dd>
+        <dt>Inflasi</dt><dd>Kenaikan harga barang dan jasa secara umum.</dd>
+      </dl>
+    </div>
+    <div class="guide-card">
+      <h3>Dari mana datanya</h3>
+      <ul class="steps">
+        <li><b>Berita:</b> ${src.rss_lokal || 0} feed media Indonesia dan ${src.rss_internasional || 0} feed media internasional (${esc((src.media_rss || []).join(', '))}), ditambah ${(src.topik_id || 0) + (src.topik_en || 0)} topik pencarian Google News yang menjangkau puluhan media lain.</li>
+        <li><b>Harga:</b> ${(src.harga || []).map((h) => `${esc(h.nama)} (${esc(h.sumber)})`).join('; ')}. Harga hanya dipakai di belakang layar untuk menentukan sektor yang bergerak dan sebagai bukti perkiraan.</li>
+        <li><b>AI:</b> Cloudflare Workers AI (kuota gratis) menyusun peristiwa, mengusulkan kaitan, dan memberi saran pengecekan perkiraan.</li>
+      </ul>
+    </div>`;
+}
+
+function panduanPemilik() {
+  const goto = (tab, label) => `<button type="button" class="linklike plainbtn" data-goto="${tab}">${label}</button>`;
+  return `
+    <div class="guide-card">
+      <h3>Masuk dan keluar</h3>
+      <ul class="steps">
+        <li>Klik <b>Masuk sebagai pemilik</b> di kanan atas, lalu masukkan PIN. Menu ${goto('tinjau', '<b>Tinjau</b>')} akan muncul.</li>
+        <li>PIN hanya diingat selama tab browser terbuka. Klik <b>Keluar dari mode pemilik</b> bila memakai perangkat bersama.</li>
+        <li>Jangan bagikan PIN. Penguji cukup membuka aplikasi tanpa PIN.</li>
+      </ul>
+    </div>
+    <div class="guide-card">
+      <h3>Rutinitas malam (± 5 menit)</h3>
+      <ol class="steps">
+        <li>Buka ${goto('tinjau', '<b>Tinjau</b>')}. Angka di samping tulisan Tinjau adalah jumlah usulan yang menunggu.</li>
+        <li>Untuk setiap usulan kaitan, baca alasannya dan "mengapa diprioritaskan". Bila ragu, klik judul peristiwa untuk membaca beritanya. Lalu pilih <b>Setujui</b> (masuk ke Rantai) atau <b>Tolak</b>. Maksimal 5 keputusan per malam; usulan lain tidak hilang dan ikut bersaing besok.</li>
+        <li>Di bagian "Peristiwa dari pembaruan terakhir", klik <b>Arsipkan</b> untuk peristiwa yang tidak relevan agar tidak ikut dikaitkan.</li>
+        <li>Buka ${goto('perkiraan', '<b>Perkiraan</b>')} dan pilih saringan <b>Perlu keputusan</b> (angka di samping tulisan Perkiraan). Baca saran AI dan buktinya, lalu putuskan.</li>
+      </ol>
+    </div>
+    <div class="guide-card">
+      <h3>Mencatat perkiraan</h3>
+      <ul class="steps">
+        <li>Dari ${goto('rantai', 'Rantai')}: buka satu rantai, lalu di bagian "Perkiraan dari rantai ini" klik <b>Catat sebagai perkiraan</b> pada hipotesis AI, atau tulis perkiraan Anda sendiri beserta jangka waktu ceknya.</li>
+        <li>Bisa juga dari panel detail peristiwa (klik judul peristiwa di mana saja).</li>
+        <li>Perkiraan <b>otomatis masuk kelompok sektornya</b> berdasarkan isi kalimatnya, misalnya perkiraan tentang rupiah masuk Keuangan & Moneter. Perkiraan yang sama tidak akan tercatat dua kali.</li>
+        <li>Perkiraan yang salah ketik bisa dihapus lewat tombol <b>Hapus</b>.</li>
+      </ul>
+    </div>
+    <div class="guide-card">
+      <h3>Pengecekan perkiraan semi-otomatis</h3>
+      <ol class="steps">
+        <li><b>AI mengumpulkan bukti:</b> berita yang sudah tersimpan, pencarian Google News sejak tanggal peristiwa, dan perubahan harga terkait (kurs, emas, Brent).</li>
+        <li><b>AI memberi saran:</b> "sudah terjadi", "tidak terjadi", atau "belum ada bukti yang cukup", lengkap dengan alasan dan tautan buktinya. AI tidak pernah mengubah status perkiraan sendiri.</li>
+        <li><b>Anda mengecek paralel:</b> buka tautan bukti, atau klik <b>Cek sendiri ↗</b> untuk mencari berita terkait di Google News.</li>
+        <li><b>Anda memutuskan:</b> klik <b>Setujui saran</b> bila setuju, atau tandai sebaliknya bila tidak. Keputusan bisa dibatalkan. Angka "AI sependapat" menunjukkan seberapa sering saran AI cocok dengan keputusan Anda.</li>
+      </ol>
+      <p class="muted small" style="margin-top:8px">Kapan AI mengecek: otomatis saat tanggal cek tiba, seminggu sekali untuk perkiraan lain (siapa tahu sudah terjadi lebih awal), atau kapan saja lewat tombol <b>Minta saran AI</b>. Pengecekan berjalan di latar belakang tiap ±5 menit.</p>
+    </div>
+    <div class="guide-card">
+      <h3>Tombol lain di Tinjau</h3>
+      <dl class="legend-list">
+        <dt>Ambil berita sekarang</dt><dd>Pembaruan di luar jadwal 17.30 WIB. Masuk antrean dan diproses paling lambat 5 menit kemudian.</dd>
+        <dt>Cek sumber berita</dt><dd>Memeriksa setiap media dan topik: berapa judul yang didapat dan mana yang gagal. Tidak memakai kuota AI.</dd>
+        <dt>Isi riwayat</dt><dd>Mengambil berita lampau sejak tanggal yang Anda pilih (paling jauh 60 hari), 4 hari per giliran. Hasilnya: peristiwa di Linimasa, usulan kaitan riwayat (antrean sendiri, tidak memakai jatah 5 per malam), dan beberapa contoh perkiraan yang dicek AI setelah semua giliran selesai.</dd>
+      </dl>
+    </div>
+    <div class="guide-card">
+      <h3>Batas yang perlu diingat</h3>
+      <ul class="steps">
+        <li>Kuota AI gratis: ${st_ai()} panggilan per hari. Riwayat dan pengecekan perkiraan otomatis berhenti lebih dulu agar pembaruan harian tetap berjalan; sisanya dilanjutkan besok.</li>
+        <li>Pengunjung tidak bisa mengubah apa pun; semua tombol pemilik membutuhkan PIN.</li>
+      </ul>
+    </div>`;
+}
+function st_ai() {
+  return state.status?.aiLimit || 40;
 }
 
 // ---------- Mulai ----------
@@ -706,6 +1128,6 @@ async function renderPerkiraan() {
   const h = location.hash.replace('#', '');
   const [tab, id] = h.split('/');
   if (tab === 'rantai' && id) state.chainId = Number(id);
-  const valid = ['tinjau', 'linimasa', 'rantai', 'sektor', 'perkiraan'];
+  const valid = ['tinjau', 'linimasa', 'rantai', 'sektor', 'perkiraan', 'panduan'];
   go(valid.includes(tab) ? tab : 'rantai');
 })();

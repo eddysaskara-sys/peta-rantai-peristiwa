@@ -1,26 +1,63 @@
-import { GDELT_QUERIES, RSS_FEEDS, MAX_LOKAL, MAX_INTERNASIONAL } from './constants.js';
-import { sleep } from './util.js';
+import {
+  GDELT_QUERIES,
+  RSS_FEEDS,
+  MAX_LOKAL,
+  MAX_INTERNASIONAL,
+  GNEWS_TOPIK,
+  GNEWS_EDISI,
+  GNEWS_PER_TOPIK,
+  GNEWS_PER_TOPIK_RIWAYAT,
+  RSS_PER_FEED,
+  DOMAIN_INDONESIA,
+  DOMAIN_INTERNASIONAL,
+} from './constants.js';
+import { sleep, addDays } from './util.js';
 
 const UA = 'PetaRantaiPeristiwa/1.0 (prototipe pribadi)';
 const MAX_XML = 150_000; // batasi ukuran yang diproses agar hemat CPU
+const MAX_XML_GNEWS = 260_000; // feed Google News lebih panjang karena deskripsinya berisi HTML
 
-/** Ambil semua sumber berita. Sumber yang gagal dicatat, tidak menghentikan proses. */
-export async function collectHeadlines(days) {
+/**
+ * Ambil semua sumber berita. Sumber yang gagal dicatat, tidak menghentikan proses.
+ * - Pembaruan biasa: { days } -> feed RSS + pencarian topik Google News beberapa hari terakhir.
+ * - Riwayat: { jendela: { mulai, sampai } } -> hanya Google News, dibatasi tanggal, karena feed RSS
+ *   hanya berisi berita terbaru.
+ */
+export async function collectHeadlines(opts = {}) {
+  if (typeof opts === 'number') opts = { days: opts };
+  const days = Math.max(1, Math.min(7, Number(opts.days) || 1));
+  const jendela = opts.jendela || null;
   const errors = [];
   const stats = [];
-  const timespan = `${Math.max(1, Math.min(7, days))}d`;
 
-  const rssPromise = Promise.all(
-    RSS_FEEDS.map(async (feed) => {
+  const rssPromise = jendela
+    ? Promise.resolve([])
+    : Promise.all(
+        RSS_FEEDS.map(async (feed) => {
+          const name = feed.label || feed.source;
+          try {
+            const r = await fetch(feed.url, { headers: { 'User-Agent': UA } });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const xml = (await r.text()).slice(0, MAX_XML);
+            const items = parseRss(xml, feed.source, feed.origin, RSS_PER_FEED);
+            stats.push(`${name}: ${items.length}`);
+            return items;
+          } catch (e) {
+            errors.push(`${name}: ${e.message}`);
+            return [];
+          }
+        })
+      );
+
+  const gnewsPromise = Promise.all(
+    GNEWS_TOPIK.map(async (t, i) => {
+      const name = `Google News ${t.edisi.toUpperCase()} #${i + 1}`;
       try {
-        const r = await fetch(feed.url, { headers: { 'User-Agent': UA } });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const xml = (await r.text()).slice(0, MAX_XML);
-        const items = parseRss(xml, feed.source, feed.origin, 30);
-        stats.push(`${feed.source}: ${items.length}`);
+        const items = await fetchGnews(t, jendela ? { jendela } : { days });
+        stats.push(`${name}: ${items.length}`);
         return items;
       } catch (e) {
-        errors.push(`${feed.source}: ${e.message}`);
+        errors.push(`${name}: ${String(e.message || e).slice(0, 80)}`);
         return [];
       }
     })
@@ -28,8 +65,9 @@ export async function collectHeadlines(days) {
 
   // GDELT membatasi kira-kira 1 permintaan per 5 detik per alamat IP. Alamat IP Cloudflare
   // dipakai bersama banyak pengguna, jadi diberi jeda lebih lama dan satu kali coba ulang.
+  const timespan = `${days}d`;
   const gdelt = [];
-  for (let i = 0; i < GDELT_QUERIES.length; i++) {
+  for (let i = 0; !jendela && i < GDELT_QUERIES.length; i++) {
     if (i > 0) await sleep(7000);
     let items = null;
     for (let attempt = 0; attempt < 2 && items === null; attempt++) {
@@ -51,9 +89,69 @@ export async function collectHeadlines(days) {
   }
 
   const rss = (await rssPromise).flat();
-  const cutoff = Date.now() - (days + 1) * 86400000;
-  const all = [...gdelt, ...rss].filter((a) => !a.published_at || Date.parse(a.published_at) >= cutoff);
-  return { headlines: selectHeadlines(all), errors, stats };
+  const gnews = (await gnewsPromise).flat();
+  let all = [...gdelt, ...rss, ...gnews];
+  if (jendela) {
+    // Toleransi 1 hari di kedua sisi karena zona waktu; tanggal peristiwa nanti dijepit ke jendela.
+    const from = Date.parse(`${addDays(jendela.mulai, -1)}T00:00:00+07:00`);
+    const to = Date.parse(`${addDays(jendela.sampai, 2)}T00:00:00+07:00`);
+    all = all.filter((a) => a.published_at && Date.parse(a.published_at) >= from && Date.parse(a.published_at) < to);
+  } else {
+    const cutoff = Date.now() - (days + 1) * 86400000;
+    all = all.filter((a) => !a.published_at || Date.parse(a.published_at) >= cutoff);
+  }
+  return { headlines: selectHeadlines(all), errors, stats, total: all.length };
+}
+
+/** Alamat pencarian Google News RSS untuk satu topik. */
+export function gnewsUrl(topik, { days = 1, jendela = null, setelah = null } = {}) {
+  const ed = GNEWS_EDISI[topik.edisi] || GNEWS_EDISI.id;
+  let q = topik.q;
+  if (jendela) q += ` after:${jendela.mulai} before:${addDays(jendela.sampai, 1)}`;
+  else if (setelah) q += ` after:${setelah}`;
+  else q += ` when:${days + 1}d`;
+  return `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=${ed.hl}&gl=${ed.gl}&ceid=${ed.ceid}`;
+}
+
+export async function fetchGnews(topik, opts = {}) {
+  const r = await fetch(gnewsUrl(topik, opts), { headers: { 'User-Agent': UA } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const xml = (await r.text()).slice(0, MAX_XML_GNEWS);
+  const ed = GNEWS_EDISI[topik.edisi] || GNEWS_EDISI.id;
+  const limit = opts.limit || (opts.jendela ? GNEWS_PER_TOPIK_RIWAYAT : GNEWS_PER_TOPIK);
+  return parseGnews(xml, ed.origin, limit);
+}
+
+/** Feed Google News: judul berakhiran " - Nama Media", media asli ada di <source url="...">. */
+export function parseGnews(xml, defaultOrigin, limit = 30) {
+  const out = [];
+  for (const it of items(xml, limit * 2)) {
+    if (out.length >= limit) break;
+    let title = decodeEntities(stripTags(tag(it, 'title')));
+    const link = tag(it, 'link').trim();
+    const srcM = it.match(/<source[^>]*url="([^"]*)"[^>]*>([\s\S]*?)<\/source>/);
+    const srcName = srcM ? decodeEntities(srcM[2]).trim() : '';
+    const host = srcM ? hostOf(decodeEntities(srcM[1])) : '';
+    if (srcName && title.endsWith(' - ' + srcName)) title = title.slice(0, -(srcName.length + 3));
+    if (!title || !/^https?:\/\//.test(link)) continue;
+    out.push({
+      url: link,
+      title: cleanTitle(title),
+      source: host || srcName || 'news.google.com',
+      origin: originOf(host, defaultOrigin),
+      published_at: toIso(tag(it, 'pubDate')),
+    });
+  }
+  return out;
+}
+
+/** Media Indonesia atau internasional, dari nama domainnya. */
+export function originOf(host, fallback) {
+  if (!host) return fallback;
+  const match = (list) => list.some((d) => host === d || host.endsWith('.' + d));
+  if (host.endsWith('.id') || match(DOMAIN_INDONESIA)) return 'lokal';
+  if (match(DOMAIN_INTERNASIONAL)) return 'internasional';
+  return fallback;
 }
 
 export async function fetchGdelt(query, timespan) {
@@ -77,15 +175,13 @@ export async function fetchGdelt(query, timespan) {
 }
 
 export function parseRss(xml, source, origin, limit = 30) {
-  const items = [];
-  const re = /<item[\s>][\s\S]*?<\/item>/g;
-  let m;
-  while ((m = re.exec(xml)) && items.length < limit) {
-    const it = m[0];
+  const out = [];
+  for (const it of items(xml, limit * 2)) {
+    if (out.length >= limit) break;
     const title = decodeEntities(stripTags(tag(it, 'title')));
     const link = (tag(it, 'link') || tag(it, 'guid')).trim();
     if (!title || !/^https?:\/\//.test(link)) continue;
-    items.push({
+    out.push({
       url: link,
       title: cleanTitle(title),
       source,
@@ -93,31 +189,89 @@ export function parseRss(xml, source, origin, limit = 30) {
       published_at: toIso(tag(it, 'pubDate') || tag(it, 'dc:date')),
     });
   }
-  return items;
+  return out;
 }
 
-/** Buang duplikat, urutkan terbaru, dan seimbangkan media lokal dan internasional. */
-export function selectHeadlines(list) {
+/**
+ * Buang duplikat, lalu pilih bergiliran per media (terbaru dulu di tiap media), terpisah untuk
+ * media lokal dan internasional. Urutan hasil: semua lokal dulu, lalu internasional.
+ */
+export function selectHeadlines(list, maxLokal = MAX_LOKAL, maxIntl = MAX_INTERNASIONAL) {
   const seenUrl = new Set();
   const seenTitle = new Set();
   const unique = [];
   for (const a of list) {
-    const key = a.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60);
+    const key = titleKey(a.title);
     if (seenUrl.has(a.url) || seenTitle.has(key)) continue;
     seenUrl.add(a.url);
     seenTitle.add(key);
     unique.push(a);
   }
   unique.sort((a, b) => (b.published_at || '').localeCompare(a.published_at || ''));
-  const lokal = unique.filter((a) => a.origin === 'lokal').slice(0, MAX_LOKAL);
-  const intl = unique.filter((a) => a.origin !== 'lokal').slice(0, MAX_INTERNASIONAL);
+  const lokal = roundRobin(unique.filter((a) => a.origin === 'lokal'), maxLokal);
+  const intl = roundRobin(unique.filter((a) => a.origin !== 'lokal'), maxIntl);
   return [...lokal, ...intl];
 }
 
+export function titleKey(t) {
+  return String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60);
+}
+
+function roundRobin(items, max) {
+  const bySrc = new Map();
+  for (const a of items) {
+    if (!bySrc.has(a.source)) bySrc.set(a.source, []);
+    bySrc.get(a.source).push(a);
+  }
+  const queues = [...bySrc.values()];
+  const out = [];
+  let i = 0;
+  while (out.length < max && queues.some((q) => q.length)) {
+    const q = queues[i++ % queues.length];
+    if (q.length) out.push(q.shift());
+  }
+  // Kembalikan dalam urutan waktu terbaru agar daftar untuk AI tetap rapi.
+  return out.sort((a, b) => (b.published_at || '').localeCompare(a.published_at || ''));
+}
+
+/** Isi elemen XML pertama bernama `name` (tanpa regex agar hemat CPU di Cloudflare). */
 function tag(s, name) {
-  const m = s.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)<\\/${name}>`));
-  if (!m) return '';
-  return m[1].replace(/^\s*<!\[CDATA\[/, '').replace(/\]\]>\s*$/, '').trim();
+  const open = '<' + name;
+  let i = s.indexOf(open);
+  while (i >= 0) {
+    const c = s.charCodeAt(i + open.length);
+    if (c === 62 || c === 32 || c === 9 || c === 10 || c === 13) break; // '>' atau spasi
+    i = s.indexOf(open, i + 1);
+  }
+  if (i < 0) return '';
+  const start = s.indexOf('>', i) + 1;
+  if (start <= 0 || s.charCodeAt(start - 2) === 47) return ''; // <tag ... /> tanpa isi
+  const end = s.indexOf('</' + name + '>', start);
+  if (end < 0) return '';
+  let v = s.slice(start, end).trim();
+  if (v.startsWith('<![CDATA[')) v = v.slice(9);
+  if (v.endsWith(']]>')) v = v.slice(0, -3);
+  return v.trim();
+}
+
+/** Potong XML menjadi blok <item>...</item> (paling banyak `limit` blok). */
+function items(xml, limit) {
+  const out = [];
+  let i = 0;
+  while (out.length < limit) {
+    i = xml.indexOf('<item', i);
+    if (i < 0) break;
+    const c = xml.charCodeAt(i + 5);
+    if (c !== 62 && c !== 32 && c !== 10 && c !== 13 && c !== 9) {
+      i += 5;
+      continue;
+    }
+    const end = xml.indexOf('</item>', i);
+    if (end < 0) break;
+    out.push(xml.slice(i, end + 7));
+    i = end + 7;
+  }
+  return out;
 }
 
 function stripTags(s) {
@@ -157,7 +311,7 @@ function toIso(s) {
   return Number.isNaN(t) ? null : new Date(t).toISOString();
 }
 
-function hostOf(u) {
+export function hostOf(u) {
   try {
     return new URL(u).hostname.replace(/^www\./, '');
   } catch {

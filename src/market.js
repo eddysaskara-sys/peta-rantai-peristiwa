@@ -60,11 +60,57 @@ export async function fetchSeries(kode, env) {
   throw new Error('seri tidak dikenal: ' + kode);
 }
 
+/**
+ * Riwayat harga harian gratis tanpa key, hanya untuk mengisi hari yang belum punya data
+ * (tidak pernah menimpa harga dari sumber utama).
+ * - Brent: FRED (Federal Reserve Bank of St. Louis), seri DCOILBRENTEU dari EIA. Biasanya
+ *   tertinggal beberapa hari, jadi dipakai sebagai pembanding 30 hari, bukan harga hari ini.
+ */
+export const RIWAYAT_HARGA = {
+  BRENT: { sumber: 'FRED (EIA)', url: (start) => `https://fred.stlouisfed.org/graph/fredgraph.csv?id=DCOILBRENTEU&cosd=${start}` },
+};
+
+export function parseFredCsv(text) {
+  const out = [];
+  for (const line of String(text).split(/\r?\n/).slice(1)) {
+    const [day, v] = line.split(',');
+    const nilai = Number(v);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day || '') && nilai > 0) out.push({ day, nilai });
+  }
+  return out;
+}
+
+async function fetchHistory(kode) {
+  const h = RIWAYAT_HARGA[kode];
+  const r = await fetch(h.url(addDays(wibDate(), -75)), { headers: { 'User-Agent': UA } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const text = await r.text();
+  if (!/^\s*(observation_date|DATE)/i.test(text)) throw new Error('bukan CSV FRED');
+  return parseFredCsv(text);
+}
+
 /** Ambil semua seri harga dan simpan. Kegagalan satu sumber tidak menghentikan pembaruan. */
 export async function collectMarket(env) {
   const db = env.DB;
   const notes = [];
   for (const kode of Object.keys(SERI_HARGA)) {
+    if (RIWAYAT_HARGA[kode]) {
+      try {
+        const rows = await fetchHistory(kode);
+        if (rows.length) {
+          await db.batch(
+            rows.map((x) =>
+              db
+                .prepare('INSERT OR IGNORE INTO market_prices (kode, day, nilai, sumber, fetched_at) VALUES (?, ?, ?, ?, ?)')
+                .bind(kode, x.day, x.nilai, RIWAYAT_HARGA[kode].sumber, nowIso())
+            )
+          );
+        }
+        notes.push(`${SERI_HARGA[kode].nama} riwayat ${RIWAYAT_HARGA[kode].sumber}: ${rows.length} data`);
+      } catch (e) {
+        notes.push(`${SERI_HARGA[kode].nama} riwayat gagal (${String(e.message || e).slice(0, 60)})`);
+      }
+    }
     try {
       const rows = await fetchSeries(kode, env);
       if (rows.length) {
@@ -72,9 +118,12 @@ export async function collectMarket(env) {
           rows.map((x) =>
             db
               .prepare(
+                // Penutupan sebelumnya ("perkiraan") boleh menggantikan data riwayat sumber lain
+                // agar perubahan harian dihitung dari sumber yang sama, tetapi tidak menimpa
+                // data sumber utama yang sudah tersimpan.
                 x.perkiraan
-                  ? 'INSERT OR IGNORE INTO market_prices (kode, day, nilai, sumber, fetched_at) VALUES (?, ?, ?, ?, ?)'
-                  : 'INSERT INTO market_prices (kode, day, nilai, sumber, fetched_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(kode, day) DO UPDATE SET nilai = excluded.nilai, fetched_at = excluded.fetched_at'
+                  ? "INSERT INTO market_prices (kode, day, nilai, sumber, fetched_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(kode, day) DO UPDATE SET nilai = excluded.nilai, sumber = excluded.sumber, fetched_at = excluded.fetched_at WHERE market_prices.sumber != excluded.sumber"
+                  : 'INSERT INTO market_prices (kode, day, nilai, sumber, fetched_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(kode, day) DO UPDATE SET nilai = excluded.nilai, sumber = excluded.sumber, fetched_at = excluded.fetched_at'
               )
               .bind(kode, x.day, x.nilai, SERI_HARGA[kode].sumber, nowIso())
           )
@@ -86,6 +135,17 @@ export async function collectMarket(env) {
     }
   }
   return 'Harga pasar: ' + notes.join(', ');
+}
+
+/**
+ * Harga terakhir pada atau sebelum suatu tanggal, dan harga terbaru. Untuk bukti perkiraan.
+ * Mengembalikan null bila salah satunya tidak ada atau keduanya hari yang sama.
+ */
+export async function priceChange(db, kode, sejak) {
+  const a = await db.prepare('SELECT day, nilai FROM market_prices WHERE kode = ? AND day <= ? ORDER BY day DESC LIMIT 1').bind(kode, sejak).first();
+  const b = await db.prepare('SELECT day, nilai FROM market_prices WHERE kode = ? ORDER BY day DESC LIMIT 1').bind(kode).first();
+  if (!a || !b || b.day <= a.day) return null;
+  return { kode, nama: SERI_HARGA[kode].nama, dari: a, ke: b, perubahan: (b.nilai / a.nilai - 1) * 100 };
 }
 
 // ---------- Perhitungan sinyal (fungsi murni, mudah diuji) ----------
@@ -174,7 +234,10 @@ export async function computeSignals(db, today = wibDate()) {
     prices[kode] = rows.results.reverse();
   }
   const evRows = await db
-    .prepare("SELECT created_at, sektor FROM events WHERE status = 'aktif' AND created_at >= ?")
+    // Peristiwa dari isi riwayat tidak dihitung: semuanya dibuat pada hari yang sama dan akan mengacaukan porsi harian.
+    .prepare(
+      "SELECT created_at, sektor FROM events WHERE status = 'aktif' AND created_at >= ? AND (run_id IS NULL OR run_id NOT IN (SELECT id FROM runs WHERE trigger = 'riwayat'))"
+    )
     .bind(new Date(`${addDays(today, -8)}T00:00:00+07:00`).toISOString())
     .all();
   const news = newsSignals(

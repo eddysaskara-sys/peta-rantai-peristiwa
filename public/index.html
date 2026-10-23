@@ -28,7 +28,8 @@
     <button type="button" data-tab="tinjau" class="tab owner-only" hidden>Tinjau <span id="badge" class="badge" hidden></span></button>
     <button type="button" data-tab="linimasa" class="tab">Linimasa</button>
     <button type="button" data-tab="sektor" class="tab">Sektor</button>
-    <button type="button" data-tab="perkiraan" class="tab">Perkiraan</button>
+    <button type="button" data-tab="perkiraan" class="tab">Perkiraan <span id="badge-fc" class="badge" hidden></span></button>
+    <button type="button" data-tab="panduan" class="tab">Panduan</button>
   </nav>
 
   <main id="view" tabindex="-1"></main>
@@ -43,7 +44,7 @@
   <dialog id="pin-dialog">
     <form method="dialog" id="pin-form">
       <h2>Masuk sebagai pemilik</h2>
-      <p class="muted">Hanya pemilik yang bisa mengambil berita, menyetujui kaitan, dan mencatat perkiraan. Penguji cukup melihat.</p>
+      <p class="muted">Hanya pemilik yang bisa mengambil berita, menyetujui kaitan, dan memutuskan perkiraan. Pengunjung cukup melihat. Belum tahu caranya? Buka tab Panduan.</p>
       <label for="pin-input">PIN</label>
       <input id="pin-input" type="password" inputmode="numeric" autocomplete="current-password" required>
       <p id="pin-error" class="error" hidden></p>

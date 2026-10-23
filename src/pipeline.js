@@ -1,14 +1,25 @@
 import { collectHeadlines } from './sources.js';
 import { collectMarket } from './market.js';
 import { runJson, clusterPrompt, linkPrompt, CLUSTER_SCHEMA, LINK_SCHEMA } from './ai.js';
-import { SEKTOR, INDIKATOR, JENIS } from './constants.js';
-import { wibDate, wibDateDaysAgo, nowIso, parseList, matchLabels } from './util.js';
+import {
+  SEKTOR,
+  INDIKATOR,
+  JENIS,
+  AI_DAILY_LIMIT,
+  AI_CADANGAN,
+  RIWAYAT_JENDELA,
+  RIWAYAT_MAKS_HARI,
+  RIWAYAT_PERKIRAAN,
+  INDIKATOR_INDONESIA,
+} from './constants.js';
+import { wibDate, wibDateDaysAgo, nowIso, parseList, matchLabels, addDays } from './util.js';
+import { checkForecasts, aiCallsToday } from './forecast.js';
 
 /**
  * Satu kali pembaruan: ambil berita -> AI menyusun peristiwa -> AI mengusulkan kaitan.
  * Kaitan disimpan sebagai "usulan"; pemilik yang memutuskan setujui/tolak.
  */
-export async function runPipeline(env, { trigger = 'manual', days = 1, runId: queuedId = null } = {}) {
+export async function runPipeline(env, { trigger = 'manual', days = 1, runId: queuedId = null, jendela = null } = {}) {
   const db = env.DB;
   const busy = await db
     .prepare("SELECT id FROM runs WHERE status = 'berjalan' AND started_at > ? LIMIT 1")
@@ -26,18 +37,21 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
       .first();
     runId = run.id;
   }
-  const notes = [];
+  // Catatan pembaruan riwayat selalu diawali penanda jendelanya, untuk melacak jendela yang sudah selesai.
+  const notes = jendela ? [penandaJendela(jendela)] : [];
 
   try {
     // 0. Ambil harga pasar (untuk prioritas sektor). Gagal di sini tidak menghentikan pembaruan.
-    try {
-      notes.push(await collectMarket(env));
-    } catch (e) {
-      notes.push('Harga pasar gagal: ' + String(e.message || e).slice(0, 120));
+    if (!jendela) {
+      try {
+        notes.push(await collectMarket(env));
+      } catch (e) {
+        notes.push('Harga pasar gagal: ' + String(e.message || e).slice(0, 120));
+      }
     }
 
     // 1. Ambil berita
-    const { headlines, errors, stats = [] } = await collectHeadlines(days);
+    const { headlines, errors, stats = [] } = await collectHeadlines(jendela ? { jendela } : { days });
     notes.push('Berita per sumber: ' + stats.join(', '));
     notes.push(...errors.map((e) => 'Sumber gagal: ' + e));
 
@@ -65,7 +79,7 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
     const cp = clusterPrompt(headlines2);
     const m1 = {};
     const clustered = await runJson(env, cp.system, cp.user, CLUSTER_SCHEMA, m1);
-    const events = normalizeEvents(clustered, headlines2);
+    const events = normalizeEvents(clustered, headlines2, jendela);
     notes.push(`AI peristiwa (${m1.model}): ${clustered.peristiwa.length} diusulkan, ${events.length} lolos pemeriksaan`);
     if (m1.gagal.length) notes.push('Percobaan AI gagal: ' + m1.gagal.join(' | '));
 
@@ -100,16 +114,25 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
       );
     }
 
+    // 3b. Riwayat: catat beberapa hipotesis dampak AI sebagai contoh perkiraan, untuk dicek semi-otomatis.
+    if (jendela && newEvents.length) {
+      const contoh = pilihContohPerkiraan(newEvents);
+      if (contoh.length) {
+        await db.batch(
+          contoh.map((c) =>
+            db
+              .prepare("INSERT INTO forecasts (event_id, teks, tanggal_cek, created_at, asal) VALUES (?, ?, ?, ?, 'riwayat')")
+              .bind(c.event_id, c.teks, c.tanggal_cek, nowIso())
+          )
+        );
+        notes.push(`Contoh perkiraan dari riwayat: ${contoh.length}`);
+      }
+    }
+
     // 4. AI mengusulkan kaitan ke peristiwa lama dan antar peristiwa baru
     let nLinks = 0;
     if (newEvents.length) {
-      const oldRows = await db
-        .prepare(
-          "SELECT id, tanggal, judul, tingkat, sektor FROM events WHERE status = 'aktif' AND run_id != ? AND tanggal >= ? ORDER BY tanggal DESC, id DESC LIMIT 40"
-        )
-        .bind(runId, wibDateDaysAgo(30))
-        .all();
-      const oldEvents = oldRows.results.map((r) => ({ ...r, sektor: parseList(r.sektor) }));
+      const oldEvents = (await peristiwaPembanding(db, runId, jendela)).map((r) => ({ ...r, sektor: parseList(r.sektor) }));
       if (newEvents.length + oldEvents.length >= 2) {
         const lp = linkPrompt(newEvents, oldEvents);
         const m2 = {};
@@ -149,7 +172,9 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
  */
 export async function enqueueRun(env, days) {
   const db = env.DB;
-  const pending = await db.prepare("SELECT id FROM runs WHERE status IN ('antre','berjalan') ORDER BY id DESC LIMIT 1").first();
+  const pending = await db
+    .prepare("SELECT id FROM runs WHERE status IN ('antre','berjalan') AND trigger IN ('manual','jadwal') ORDER BY id DESC LIMIT 1")
+    .first();
   if (pending) return { ok: true, runId: pending.id, already: true };
   const row = await db
     .prepare("INSERT INTO runs (started_at, trigger, status, note) VALUES (?, 'manual', 'antre', ?) RETURNING id")
@@ -158,18 +183,194 @@ export async function enqueueRun(env, days) {
   return { ok: true, runId: row.id, already: false };
 }
 
-/** Dipanggil jadwal tiap 5 menit: jalankan antrean bila ada, bereskan yang macet. */
+/** Pemeriksaan sumber berita tanpa AI: berapa judul yang didapat dari setiap sumber. */
+export async function enqueueCekSumber(env) {
+  const db = env.DB;
+  const pending = await db.prepare("SELECT id FROM runs WHERE status IN ('antre','berjalan') AND trigger = 'cek-sumber' LIMIT 1").first();
+  if (pending) return { ok: true, runId: pending.id, already: true };
+  const row = await db
+    .prepare("INSERT INTO runs (started_at, trigger, status) VALUES (?, 'cek-sumber', 'antre') RETURNING id")
+    .bind(nowIso())
+    .first();
+  return { ok: true, runId: row.id, already: false };
+}
+
+export function penandaJendela(j) {
+  return `riwayat=${j.mulai}..${j.sampai}`;
+}
+
+export function parseJendela(note) {
+  const m = /riwayat=(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})/.exec(note || '');
+  return m ? { mulai: m[1], sampai: m[2] } : null;
+}
+
+/** Bagi rentang tanggal menjadi jendela beberapa hari. */
+export function bagiJendela(mulai, sampai, panjang = RIWAYAT_JENDELA) {
+  const out = [];
+  for (let a = mulai; a <= sampai; a = addDays(a, panjang)) {
+    const b = addDays(a, panjang - 1);
+    out.push({ mulai: a, sampai: b < sampai ? b : sampai });
+  }
+  return out;
+}
+
+/**
+ * Isi riwayat: antrekan pembaruan riwayat per jendela RIWAYAT_JENDELA hari, dari `mulai` sampai
+ * sehari sebelum peristiwa pertama dari pembaruan biasa (agar tidak menumpuk dengan data yang ada).
+ * Jendela yang sudah selesai atau masih antre dilewati.
+ */
+export async function enqueueRiwayat(env, mulai) {
+  const db = env.DB;
+  const today = wibDate();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(mulai || '')) return { ok: false, message: 'Tanggal mulai tidak valid.' };
+  const paling = addDays(today, -RIWAYAT_MAKS_HARI);
+  if (mulai < paling) mulai = paling;
+  const pertama = await db
+    .prepare(
+      "SELECT MIN(e.tanggal) AS t FROM events e JOIN runs r ON r.id = e.run_id WHERE r.trigger IN ('jadwal','manual')"
+    )
+    .first();
+  let sampai = addDays(today, -1);
+  if (pertama?.t && addDays(pertama.t, -1) < sampai) sampai = addDays(pertama.t, -1);
+  if (mulai > sampai) return { ok: false, message: `Riwayat sampai ${sampai} sudah tercakup oleh pembaruan biasa.` };
+  const ada = await db.prepare("SELECT note, status FROM runs WHERE trigger = 'riwayat' AND status IN ('antre','berjalan','selesai')").all();
+  const sudah = new Set(ada.results.map((r) => parseJendela(r.note)).filter(Boolean).map(penandaJendela));
+  const baru = bagiJendela(mulai, sampai).filter((j) => !sudah.has(penandaJendela(j)));
+  if (baru.length) {
+    await db.batch(
+      baru.map((j) =>
+        db.prepare("INSERT INTO runs (started_at, trigger, status, note) VALUES (?, 'riwayat', 'antre', ?)").bind(nowIso(), penandaJendela(j))
+      )
+    );
+  }
+  return { ok: true, mulai, sampai, jendela: baru.length, dilewati: bagiJendela(mulai, sampai).length - baru.length };
+}
+
+/** Kemajuan isi riwayat untuk ditampilkan. */
+export async function statusRiwayat(db) {
+  const rows = (await db.prepare("SELECT id, status, note, n_events, n_links FROM runs WHERE trigger = 'riwayat' ORDER BY id").all()).results;
+  if (!rows.length) return null;
+  const j = rows.map((r) => ({ ...parseJendela(r.note), status: r.status, n_events: r.n_events, n_links: r.n_links }));
+  const by = (st) => j.filter((x) => x.status === st).length;
+  return {
+    total: j.length,
+    antre: by('antre'),
+    berjalan: by('berjalan'),
+    selesai: by('selesai'),
+    gagal: by('gagal'),
+    mulai: j.map((x) => x.mulai).filter(Boolean).sort()[0] || null,
+    sampai: j.map((x) => x.sampai).filter(Boolean).sort().pop() || null,
+    peristiwa: j.reduce((a, x) => a + (x.n_events || 0), 0),
+    kaitan: j.reduce((a, x) => a + (x.n_links || 0), 0),
+  };
+}
+
+/**
+ * Dipanggil jadwal tiap 5 menit: bereskan yang macet, jalankan satu antrean bila ada
+ * (pembaruan manual dan cek sumber didahulukan, riwayat menyusul selama kuota AI cukup),
+ * dan bila tidak ada antrean, jalankan satu giliran pengecekan perkiraan.
+ */
 export async function processQueue(env) {
   const db = env.DB;
   await db
     .prepare("UPDATE runs SET status = 'gagal', finished_at = ?, note = COALESCE(note,'') || '\nTerhenti (melewati 15 menit).' WHERE status = 'berjalan' AND started_at < ?")
     .bind(nowIso(), new Date(Date.now() - 15 * 60000).toISOString())
     .run();
-  const q = await db.prepare("SELECT id, note FROM runs WHERE status = 'antre' ORDER BY id LIMIT 1").first();
-  if (!q) return null;
-  const days = Number(/days=(\d+)/.exec(q.note || '')?.[1]) || 1;
-  await db.prepare('UPDATE runs SET note = NULL WHERE id = ?').bind(q.id).run();
-  return runPipeline(env, { trigger: 'manual', days, runId: q.id });
+  const busy = await db.prepare("SELECT id FROM runs WHERE status = 'berjalan' LIMIT 1").first();
+  if (!busy) {
+    const q = await db
+      .prepare("SELECT id, trigger, note FROM runs WHERE status = 'antre' ORDER BY CASE trigger WHEN 'riwayat' THEN 1 ELSE 0 END, id LIMIT 1")
+      .first();
+    if (q && q.trigger === 'cek-sumber') return runCekSumber(env, q.id);
+    if (q && q.trigger === 'riwayat') {
+      if ((await aiCallsToday(db)) <= AI_DAILY_LIMIT - AI_CADANGAN) {
+        return runPipeline(env, { trigger: 'riwayat', runId: q.id, jendela: parseJendela(q.note) });
+      }
+      // Kuota AI hari ini disisakan untuk pembaruan harian; riwayat dilanjutkan besok.
+    } else if (q) {
+      const days = Number(/days=(\d+)/.exec(q.note || '')?.[1]) || 1;
+      return runPipeline(env, { trigger: 'manual', days, runId: q.id });
+    }
+  }
+  const riwayatJalan = await db.prepare("SELECT id FROM runs WHERE trigger = 'riwayat' AND status IN ('antre','berjalan') LIMIT 1").first();
+  return checkForecasts(env, { riwayatSelesai: !riwayatJalan });
+}
+
+/** Cek sumber: ambil semua sumber berita dan harga, catat jumlahnya, tanpa AI dan tanpa menyimpan berita. */
+export async function runCekSumber(env, runId) {
+  const db = env.DB;
+  await db.prepare("UPDATE runs SET status = 'berjalan', started_at = ? WHERE id = ?").bind(nowIso(), runId).run();
+  const notes = [];
+  try {
+    try {
+      notes.push(await collectMarket(env));
+    } catch (e) {
+      notes.push('Harga pasar gagal: ' + String(e.message || e).slice(0, 120));
+    }
+    const { headlines, errors, stats, total } = await collectHeadlines({ days: 1 });
+    notes.push(`Cek sumber (tanpa AI): ${total} judul terkumpul, ${headlines.length} terpilih untuk AI.`);
+    notes.push('Berita per sumber: ' + stats.join(', '));
+    notes.push(...errors.map((e) => 'Sumber gagal: ' + e));
+    await finish(db, runId, 'selesai', { n_articles: total }, notes);
+    return { ok: true, runId, total, gagal: errors.length };
+  } catch (e) {
+    await finish(db, runId, 'gagal', {}, [...notes, String(e.message || e)]);
+    return { ok: false, runId, message: String(e.message || e) };
+  }
+}
+
+/**
+ * Peristiwa lama yang ditawarkan ke AI untuk dikaitkan.
+ * - Pembaruan biasa: 40 peristiwa terbaru dalam 30 hari.
+ * - Riwayat: 25 peristiwa sebelum jendela (rantai yang lebih awal) dan 15 sesudahnya
+ *   (agar riwayat bisa tersambung ke rantai yang sudah ada sekarang).
+ */
+async function peristiwaPembanding(db, runId, jendela) {
+  const cols = 'SELECT id, tanggal, judul, tingkat, sektor FROM events';
+  if (!jendela) {
+    return (
+      await db
+        .prepare(`${cols} WHERE status = 'aktif' AND run_id != ? AND tanggal >= ? ORDER BY tanggal DESC, id DESC LIMIT 40`)
+        .bind(runId, wibDateDaysAgo(30))
+        .all()
+    ).results;
+  }
+  const sebelum = await db
+    .prepare(`${cols} WHERE status = 'aktif' AND run_id != ? AND tanggal < ? AND tanggal >= ? ORDER BY tanggal DESC, id DESC LIMIT 25`)
+    .bind(runId, jendela.mulai, addDays(jendela.mulai, -30))
+    .all();
+  const sesudah = await db
+    .prepare(
+      `SELECT e.id, e.tanggal, e.judul, e.tingkat, e.sektor FROM events e
+       WHERE e.status = 'aktif' AND e.run_id != ? AND e.tanggal > ?
+       ORDER BY (SELECT COUNT(*) FROM links l WHERE l.status = 'disetujui' AND (l.dari_id = e.id OR l.ke_id = e.id)) DESC, e.tanggal, e.id
+       LIMIT 15`
+    )
+    .bind(runId, jendela.sampai)
+    .all();
+  return [...sebelum.results.reverse(), ...sesudah.results];
+}
+
+/**
+ * Contoh perkiraan dari riwayat: hipotesis dampak AI dari peristiwa riwayat, diutamakan yang
+ * jangka waktunya pendek (sudah bisa dicek sekarang) dan peristiwanya berdampak ke Indonesia.
+ */
+export function pilihContohPerkiraan(events, maks = RIWAYAT_PERKIRAAN) {
+  const kandidat = events.flatMap((ev) =>
+    (ev.dampak || []).map((d) => ({
+      event_id: ev.id,
+      teks: d.teks,
+      hari: d.hari,
+      tanggal_cek: addDays(ev.tanggal, d.hari),
+      bobot: (ev.tingkat === 'lokal' || (ev.indikator || []).some((i) => INDIKATOR_INDONESIA.includes(i)) ? 0 : 1) + (ev.articleIds?.length > 1 ? 0 : 0.5),
+    }))
+  );
+  const dipakai = new Set();
+  return kandidat
+    .sort((a, b) => a.hari - b.hari || a.bobot - b.bobot)
+    .filter((c) => (dipakai.has(c.event_id) ? false : (dipakai.add(c.event_id), true)))
+    .slice(0, maks)
+    .map(({ event_id, teks, tanggal_cek }) => ({ event_id, teks, tanggal_cek }));
 }
 
 async function finish(db, runId, status, counts, notes) {
@@ -228,7 +429,7 @@ async function existingPairs(db, links) {
 }
 
 /** Periksa hasil AI: label harus dari daftar resmi, sumber harus nyata. */
-export function normalizeEvents(out, headlines) {
+export function normalizeEvents(out, headlines, jendela = null) {
   const list = Array.isArray(out?.peristiwa) ? out.peristiwa : [];
   const today = wibDate();
   const events = [];
@@ -237,7 +438,11 @@ export function normalizeEvents(out, headlines) {
     if (!idx.length || !p.judul) continue;
     const arts = idx.map((n) => headlines[n - 1]);
     const dates = arts.map((a) => a.published_at).filter(Boolean).sort();
-    const tanggal = dates.length ? wibDate(new Date(dates[0])) : today;
+    let tanggal = dates.length ? wibDate(new Date(dates[0])) : today;
+    if (jendela) {
+      if (tanggal < jendela.mulai) tanggal = jendela.mulai;
+      if (tanggal > jendela.sampai) tanggal = jendela.sampai;
+    }
     const origins = new Set(arts.map((a) => a.origin));
     const mostlyLokal = arts.filter((a) => a.origin === 'lokal').length > arts.length / 2;
     const tingkat = p.tingkat === 'global' || p.tingkat === 'lokal' ? p.tingkat : mostlyLokal ? 'lokal' : 'global';

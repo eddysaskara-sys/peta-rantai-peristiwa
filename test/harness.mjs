@@ -2,7 +2,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const worker = (await import(ROOT + '/src/index.js')).default;
-const { cleanTitle } = await import(ROOT + '/src/sources.js');
+const { cleanTitle, parseGnews, selectHeadlines, originOf } = await import(ROOT + '/src/sources.js');
+const { kelompokPerkiraan, normalizeChecks, kataKunci } = await import(ROOT + '/src/forecast.js');
+const { bagiJendela, pilihContohPerkiraan } = await import(ROOT + '/src/pipeline.js');
 const { priceSignal, newsSignals } = await import(ROOT + '/src/market.js');
 const { rankProposals } = await import(ROOT + '/src/priority.js');
 
@@ -24,12 +26,21 @@ const DB = {
 };
 
 // ---- AI tiruan ----
-let aiCalls = 0, failSchemaOnce = true;
+let aiCalls = 0, failSchemaOnce = true, lastCheckPrompt = '';
 const AI = {
   async run(model, input) {
     aiCalls++;
     if (failSchemaOnce) { failSchemaOnce = false; throw new Error('model sibuk'); }
     const u = input.messages[1].content;
+    if (u.startsWith('Hari ini:')) {
+      lastCheckPrompt = u;
+      const cek = [...u.matchAll(/Perkiraan P(\d+)[^\n]*\n"([^"]*)"/g)].map(([, id, teks]) =>
+        /BBM/.test(teks)
+          ? { id: 'P' + id, putusan: 'terjadi', keyakinan: 0.8, alasan: 'Harga BBM nonsubsidi naik pada berita nomor 1.', bukti: [1, 42] }
+          : { id: 'P' + id, putusan: 'tidak', keyakinan: 0.6, alasan: 'Belum terlihat.', bukti: [] }
+      );
+      return { response: { cek } };
+    }
     if (u.startsWith('Daftar berita')) {
       const n = (u.match(/^\d+\./gm) || []).length;
       const obj = { peristiwa: [
@@ -64,9 +75,41 @@ const fxRates = {};
   while (days.length < 46) { d = new Date(d.getTime() + 86400e3); if (d.getUTCDay() % 6) days.push(d.toISOString().slice(0, 10)); }
   days.forEach((day, i) => { v = i === days.length - 1 ? v * 1.015 : v * (1 + (i % 2 ? 0.002 : -0.0018)); fxRates[day] = { IDR: Math.round(v) }; });
 }
-let marketDown = false;
+let marketDown = false, gnewsDaily = false, fetchLog = [];
+const dayStr = (ms) => new Date(ms).toISOString().slice(0, 10);
+const fredCsv = () => {
+  let out = 'observation_date,DCOILBRENTEU\n';
+  for (let i = 40; i >= 5; i--) out += `${dayStr(Date.now() - i * 86400e3)},${i === 20 ? '.' : (70 + (i % 3) * 0.5).toFixed(2)}\n`;
+  return out;
+};
+const gnItem = (title, src, host, date) =>
+  `<item><title>${title} - ${src}</title><link>https://news.google.com/rss/articles/${encodeURIComponent(title)}</link><pubDate>${new Date(date).toUTCString()}</pubDate><description>&lt;a&gt;x&lt;/a&gt;</description><source url="https://${host}">${src}</source></item>`;
+const gnewsMock = (u) => {
+  const q = decodeURIComponent(u.split('q=')[1].split('&')[0]);
+  const en = u.includes('hl=en-US');
+  const w = /after:(\d{4}-\d{2}-\d{2}) before:(\d{4}-\d{2}-\d{2})/.exec(q);
+  if (w) {
+    // Jendela riwayat: 2 berita per topik, bertanggal di dalam jendela.
+    const t = Date.parse(w[1] + 'T05:00:00Z') + 86400e3;
+    const topik = q.slice(0, 12);
+    return en
+      ? gnItem(`Oil prices climb ${w[1]} ${topik}`, 'Reuters', 'www.reuters.com', t) + gnItem(`Shipping rates jump ${w[1]} ${topik}`, 'CNBC', 'www.cnbc.com', t + 3600e3)
+      : gnItem(`Harga BBM nonsubsidi naik ${w[1]} ${topik}`, 'Kontan', 'industri.kontan.co.id', t) + gnItem(`Rupiah melemah ${w[1]} ${topik}`, 'Bisnis.com', 'market.bisnis.com', t + 7200e3);
+  }
+  const after = /after:(\d{4}-\d{2}-\d{2})/.exec(q);
+  if (after) {
+    // Pencarian bukti perkiraan.
+    return gnItem('Harga BBM nonsubsidi resmi naik mulai hari ini', 'CNBC Indonesia', 'www.cnbcindonesia.com', Date.now() - 3600e3) +
+      gnItem('Harga BBM lama sebelum peristiwa', 'Detik', 'finance.detik.com', Date.parse(after[1]) - 5 * 86400e3);
+  }
+  if (!gnewsDaily) return '';
+  return gnItem('Harga beras naik di Jakarta', 'Kompas', 'money.kompas.com', Date.now() - 1800e3) + gnItem('Fed holds rates steady', 'Reuters', 'www.reuters.com', Date.now() - 2400e3);
+};
 globalThis.fetch = async (url, opts = {}) => {
   url = String(url);
+  fetchLog.push(url);
+  if (url.includes('fredgraph')) return marketDown ? new Response('err', { status: 503 }) : new Response(fredCsv());
+  if (url.includes('news.google.com/rss/search')) return new Response(`<rss><channel>${gnewsMock(url)}</channel></rss>`);
   if (url.includes('frankfurter')) return marketDown ? new Response('err', { status: 503 }) : new Response(JSON.stringify({ base: 'USD', rates: fxRates }));
   if (url.includes('gold-api')) return new Response(JSON.stringify({ name: 'Gold', price: 4069.8, symbol: 'XAU', updatedAt: new Date().toISOString() }));
   if (url.includes('api-ninjas')) {
@@ -127,7 +170,7 @@ ok(cleanTitle('BI Rate Tetap di 5 , 75 %, Rupiah') === 'BI Rate Tetap di 5,75%, 
 ok(!arts.includes('Berita lama sekali'), 'berita di luar rentang waktu dibuang');
 ok(arts.some((a) => a.includes("'badly'")), 'entitas HTML didekode');
 const run1 = sq.prepare('SELECT * FROM runs').all()[0];
-ok(/antaranews/.test(run1.note) && /Berita per sumber/.test(run1.note) && /AI peristiwa/.test(run1.note), 'catatan memuat sumber gagal, jumlah per sumber, dan hasil AI');
+ok(/Antara terkini: HTTP 500/.test(run1.note) && /Berita per sumber/.test(run1.note) && /AI peristiwa/.test(run1.note), 'catatan memuat sumber gagal, jumlah per sumber, dan hasil AI');
 
 [s, d] = await call('GET', '/api/review', null, 'rahasia123');
 ok(s === 200 && d.pending.length === 2 && d.fresh.length === 3, 'tinjau: 2 usulan, 3 peristiwa baru');
@@ -160,14 +203,16 @@ ok(d.events.length === 1 && d.events[0].kelompok.includes('energi'), 'filter kel
 // ---- Harga pasar & sinyal ----
 const mp = sq.prepare('SELECT kode, COUNT(*) AS n FROM market_prices GROUP BY kode').all();
 const nOf = (k) => mp.find((r) => r.kode === k)?.n || 0;
-ok(nOf('USDIDR') >= 40 && nOf('XAU') === 1 && nOf('BRENT') === 2, 'harga tersimpan: kurs dengan riwayat, emas 1 titik, Brent + penutupan sebelumnya');
+const brentRows = sq.prepare("SELECT day, nilai, sumber FROM market_prices WHERE kode = 'BRENT' ORDER BY day").all();
+ok(nOf('USDIDR') >= 40 && nOf('XAU') === 1 && brentRows.length === 37, 'harga tersimpan: kurs dengan riwayat, emas 1 titik, Brent riwayat FRED + harga terakhir');
+ok(brentRows.filter((r) => r.sumber === 'FRED (EIA)').length === 35 && brentRows.at(-1).sumber === 'API Ninjas' && brentRows.at(-2).sumber === 'API Ninjas', 'FRED hanya mengisi hari kosong; API Ninjas tetap dipakai untuk 2 hari terakhir');
 const run1note = sq.prepare('SELECT note FROM runs WHERE id = 1').get().note;
-ok(/Harga pasar: Brent: 2 data, Emas: 1 data, USD\/IDR: \d+ data/.test(run1note), 'catatan pembaruan memuat hasil harga pasar');
+ok(/Harga pasar: Brent riwayat FRED \(EIA\): 35 data, Brent: 2 data, Emas: 1 data, USD\/IDR: \d+ data/.test(run1note), 'catatan pembaruan memuat hasil harga pasar');
 [s, d] = await call('GET', '/api/market');
 const sig = Object.fromEntries(d.signals.map((x) => [x.id, x]));
 console.log('  sinyal:', d.signals.map((x) => `${x.id}=${x.metode}/${x.bergerak ? 'GERAK' : '-'}`).join(' '));
 ok(sig.keuangan.metode === 'harga' && sig.keuangan.bergerak && /rupiah melemah/.test(sig.keuangan.label), 'kurs melonjak 1,5% terbaca sebagai gerak tidak biasa');
-ok(sig.energi.metode === 'harga' && sig.energi.bergerak && /pembanding sementara/.test(sig.energi.label), 'Brent +5,3% dengan pembanding sementara');
+ok(sig.energi.metode === 'harga' && sig.energi.bergerak && !/pembanding sementara/.test(sig.energi.label), 'Brent +5,3% dibanding riwayat 30 hari dari FRED, bukan pembanding sementara');
 ok(sig.tambang.metode !== 'harga' && /Emas: riwayat harga belum cukup/.test(sig.tambang.label), 'emas 1 titik: jatuh ke berita dan dijelaskan');
 ok(sig.pangan.metode !== 'harga', 'pangan dinilai dari berita');
 
@@ -279,4 +324,158 @@ ok(daily.ok === true, 'jadwal harian berjalan');
 let p3; await worker.scheduled({ cron: '*/5 * * * *' }, env, { waitUntil(x) { p3 = x; } }); const fromQ = await p3;
 ok(fromQ && fromQ.runId === q1.runId, 'antrean diproses oleh jadwal 5 menit');
 let p4; await worker.scheduled({ cron: '*/5 * * * *' }, env, { waitUntil(x) { p4 = x; } });
-ok((await p4) === null, 'jadwal 5 menit tanpa antrean tidak melakukan apa-apa');
+const idle = await p4;
+ok(idle && idle.dicek === 0 && !idle.runId, 'jadwal 5 menit tanpa antrean dan tanpa perkiraan yang perlu dicek tidak melakukan apa-apa');
+
+
+// ======================= Masukan pengguna 23 Okt 2026 =======================
+const OWNER = 'rahasia123';
+const tick = async () => { let p; await worker.scheduled({ cron: '*/5 * * * *' }, env, { waitUntil(x) { p = x; } }); return p; };
+
+// ---- Pengelompokan perkiraan ----
+ok(kelompokPerkiraan('Harga BBM domestik berpotensi naik 5-8% jika kurs Rupiah tetap, memicu inflasi pangan', ['Energi']) === 'energi', 'kelompok: pokok kalimat BBM -> Energi walau menyebut rupiah');
+ok(kelompokPerkiraan('Suku bunga yang tetap dapat menstabilkan nilai tukar Rupiah', ['Energi']) === 'keuangan', 'kelompok: dari teks perkiraan, bukan dari peristiwa asal');
+ok(kelompokPerkiraan('Harga minyak goreng naik dalam sebulan', []) === 'pangan', 'kelompok: "minyak goreng" masuk Pangan, bukan Energi');
+ok(kelompokPerkiraan('Lonjakan impor India menaikkan biaya pengiriman kontainer', []) === 'dagang', 'kelompok: perdagangan & logistik');
+ok(kelompokPerkiraan('Pemerintah menunda pemilu', ['Moneter']) === 'keuangan' && kelompokPerkiraan('Pemerintah menunda pemilu', ['Geopolitik & Keamanan']) === 'lintas', 'kelompok: tanpa istilah -> kelompok peristiwa asal, lalu lintas sektor');
+ok(kataKunci('Harga BBM nonsubsidi naik dalam 30 hari').includes('bbm'), 'kata kunci bukti memuat istilah kamus');
+
+// ---- API perkiraan: kelompok, cegah ganda, hapus ----
+const evBBM = sq.prepare("SELECT id, tanggal FROM events WHERE status = 'aktif' ORDER BY id DESC LIMIT 1").get();
+sq.prepare('UPDATE events SET tanggal = ? WHERE id = ?').run(dayStr(Date.now() - 20 * 86400e3), evBBM.id);
+let [fs1, f1] = await call('POST', '/api/forecasts', { event_id: evBBM.id, teks: 'Harga BBM nonsubsidi naik', tanggal_cek: dayStr(Date.now() - 2 * 86400e3) }, OWNER);
+let [, f1b] = await call('POST', '/api/forecasts', { event_id: evBBM.id, teks: 'Harga BBM nonsubsidi naik', hari: 30 }, OWNER);
+ok(fs1 === 200 && f1.id && f1b.sudah === true && f1b.id === f1.id, 'perkiraan yang sama tidak tercatat dua kali');
+let [, f2] = await call('POST', '/api/forecasts', { event_id: evBBM.id, teks: 'Rupiah melemah ke 18.000 per dolar', hari: 30 }, OWNER);
+let [, f3] = await call('POST', '/api/forecasts', { event_id: evBBM.id, teks: 'Perkiraan salah ketik', hari: 30 }, OWNER);
+[s] = await call('POST', '/api/forecasts/' + f3.id + '/hapus');
+ok(s === 401, 'penguji tidak bisa menghapus perkiraan');
+[s] = await call('POST', '/api/forecasts/' + f3.id + '/hapus', {}, OWNER);
+[s, d] = await call('GET', '/api/forecasts');
+ok(!d.forecasts.some((f) => f.id === f3.id), 'pemilik bisa menghapus perkiraan');
+const fc1 = d.forecasts.find((f) => f.id === f1.id);
+const fc2 = d.forecasts.find((f) => f.id === f2.id);
+ok(fc1.kelompok === 'energi' && fc2.kelompok === 'keuangan' && d.kelompok.length === 7, 'perkiraan baru otomatis masuk kelompoknya (6 kelompok + lintas sektor)');
+ok(fc1.perlu === true && fc1.jatuh_tempo && fc2.perlu === false && fc2.saran === null && /news\.google\.com\/search\?q=/.test(fc1.cari), 'perkiraan jatuh tempo ditandai perlu keputusan; tautan cek manual tersedia');
+ok(d.ringkasan.perlu >= 1 && d.ringkasan.total === d.forecasts.length, 'ringkasan perkiraan tersedia');
+
+// ---- Pengecekan semi-otomatis ----
+sq.prepare("INSERT INTO articles (url, title, source, origin, published_at, fetched_at) VALUES (?, ?, ?, ?, ?, ?)").run('https://contoh.id/bbm-naik', 'Pertamina umumkan harga BBM nonsubsidi naik', 'contoh.id', 'lokal', new Date(Date.now() - 5 * 86400e3).toISOString(), new Date().toISOString());
+sq.prepare("INSERT INTO articles (url, title, source, origin, published_at, fetched_at) VALUES (?, ?, ?, ?, ?, ?)").run('https://contoh.id/petugas', 'Petugas gas melon razia pangkalan', 'contoh.id', 'lokal', new Date(Date.now() - 4 * 86400e3).toISOString(), new Date().toISOString());
+[s] = await call('POST', '/api/forecasts/' + f2.id + '/cek');
+ok(s === 401, 'penguji tidak bisa meminta pengecekan');
+[s] = await call('POST', '/api/forecasts/' + f2.id + '/cek', {}, OWNER);
+[s, d] = await call('GET', '/api/forecasts');
+ok(d.forecasts.find((f) => f.id === f2.id).antre === true, 'permintaan saran AI masuk antrean');
+const aiBefore = aiCalls;
+const chk = await tick();
+console.log('  cek:', JSON.stringify(chk));
+ok(chk.dicek === 2 && aiCalls === aiBefore + 1, 'satu giliran pengecekan: 2 perkiraan dalam 1 panggilan AI');
+ok(/Pertamina umumkan harga BBM nonsubsidi naik/.test(lastCheckPrompt) && /resmi naik mulai hari ini/.test(lastCheckPrompt), 'bukti dari berita tersimpan dan pencarian Google News');
+ok(!/Harga BBM lama sebelum peristiwa/.test(lastCheckPrompt), 'berita sebelum tanggal dasar tidak dipakai sebagai bukti');
+ok(/USD\/IDR [\d.,]+ \(/.test(lastCheckPrompt), 'perkiraan rupiah diberi bukti perubahan kurs');
+[s, d] = await call('GET', '/api/forecasts');
+const c1 = d.forecasts.find((f) => f.id === f1.id);
+const c2 = d.forecasts.find((f) => f.id === f2.id);
+ok(c1.status === 'menunggu' && c1.saran.status === 'terjadi' && c1.saran.bukti.dipakai.join() === '1', 'saran AI tersimpan, nomor bukti palsu dibuang, status akhir belum berubah');
+ok(c1.saran.bukti.berita.length >= 2 && c1.saran.bukti.berita.every((b) => b.tanggal >= c1.saran.bukti.dasar), 'bukti berita tersimpan untuk dicek pemilik');
+ok(!c1.saran.bukti.berita.some((b) => /Petugas/.test(b.judul)), 'kata pendek tidak cocok di tengah kata lain (gas ≠ petugas)');
+ok(c2.saran.status === 'belum' && !c2.antre, '"tidak terjadi" sebelum tanggal cek diubah menjadi "belum"');
+const map = normalizeChecks({ cek: [{ id: 'P9', putusan: 'ngawur', keyakinan: 7, bukti: [1] }] }, [{ id: 9, tanggal_cek: '2000-01-01', bukti: { berita: [{}] } }]);
+ok(map.get(9).status === 'belum' && map.get(9).keyakinan === 1, 'putusan tak dikenal menjadi "belum", keyakinan dibatasi');
+[s] = await call('POST', '/api/forecasts/' + f1.id, { status: 'terjadi', dengan: 'saran-ai' }, OWNER);
+[s, d] = await call('GET', '/api/forecasts');
+const dec = d.forecasts.find((f) => f.id === f1.id);
+ok(dec.status === 'terjadi' && dec.diputuskan_dengan === 'saran-ai' && d.ringkasan.banding >= 1 && d.ringkasan.sepakat >= 1, 'pemilik menyetujui saran; kesepakatan AI-pemilik dihitung');
+const idle2 = await tick();
+ok(idle2.dicek === 0, 'perkiraan yang baru dicek tidak dicek ulang terus-menerus');
+sq.prepare("UPDATE ai_usage SET calls = 39 WHERE day = ?").run(new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10));
+[s] = await call('POST', '/api/forecasts/' + f2.id + '/cek', {}, OWNER);
+const q39 = await tick();
+ok(q39.dicek === 0 && /Kuota/.test(q39.message), 'pengecekan berhenti saat kuota AI hampir habis');
+sq.prepare("UPDATE ai_usage SET calls = ? WHERE day = ?").run(aiCalls, new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10));
+
+// ---- Google News & pemilihan sumber ----
+const gx = '<rss><channel>' + gnItem('Harga beras naik', 'Kompas', 'money.kompas.com', Date.now()) + gnItem('Oil up', 'Reuters', 'www.reuters.com', Date.now()) + gnItem('Kabar lain', 'Blog', 'blog.example.org', Date.now()) + '</channel></rss>';
+const gp = parseGnews(gx, 'lokal');
+ok(gp[0].title === 'Harga beras naik' && gp[0].source === 'money.kompas.com' && gp[0].origin === 'lokal', 'Google News: akhiran nama media dibuang, domain jadi sumber');
+ok(gp[1].origin === 'internasional' && gp[2].origin === 'lokal', 'Google News: asal media dari domain, sisanya mengikuti edisi');
+ok(originOf('industri.kontan.co.id', 'internasional') === 'lokal' && originOf('www.bbc.co.uk', 'lokal') === 'internasional', 'asal media: .id dan daftar media dikenali');
+const many = Array.from({ length: 80 }, (_, i) => ({ url: 'https://a/' + i, title: 'Berita A nomor ' + i, source: 'a.com', origin: 'lokal', published_at: new Date(Date.now() - i * 60e3).toISOString() }));
+const few = Array.from({ length: 4 }, (_, i) => ({ url: 'https://b/' + i, title: 'Berita B lama ' + i, source: 'b.com', origin: 'lokal', published_at: new Date(Date.now() - 86400e3 - i * 60e3).toISOString() }));
+const sel = selectHeadlines([...many, ...few], 20, 10);
+ok(sel.length === 20 && sel.filter((a) => a.source === 'b.com').length === 4, 'pemilihan bergiliran: media yang jarang menulis tetap terwakili');
+gnewsDaily = true;
+round = 7;
+fetchLog = [];
+[s, d] = await doRun(1);
+ok(d.ok && fetchLog.filter((u) => u.includes('news.google.com/rss/search')).length === 12, 'pembaruan harian ikut mencari 12 topik Google News');
+ok(fetchLog.length <= 45, `jumlah permintaan ke luar per pembaruan (${fetchLog.length}) di bawah batas 50 Cloudflare gratis`);
+gnewsDaily = false;
+
+// ---- Cek sumber (tanpa AI) ----
+let [, cs] = await call('POST', '/api/sumber/cek', {}, OWNER);
+const aiCs = aiCalls;
+const csRun = await tick();
+const csRow = sq.prepare('SELECT * FROM runs WHERE id = ?').get(cs.runId);
+ok(csRun.runId === cs.runId && csRow.status === 'selesai' && /Cek sumber \(tanpa AI\)/.test(csRow.note) && /Antara terkini: HTTP 500/.test(csRow.note) && aiCalls === aiCs, 'cek sumber: jumlah per sumber dan sumber gagal tercatat, tanpa AI');
+ok(sq.prepare("SELECT COUNT(*) AS n FROM articles WHERE run_id = ?").get(cs.runId).n === 0, 'cek sumber tidak menyimpan berita');
+[s, d] = await call('GET', '/api/status');
+ok(d.lastRun.trigger !== 'cek-sumber' && d.sumber.rss_lokal >= 8 && d.sumber.topik_en === 6, 'status: info pembaruan tidak tertimpa cek sumber; ringkasan sumber tersedia');
+
+// ---- Isi riwayat ----
+ok(bagiJendela('2026-10-01', '2026-10-10').map((j) => j.mulai + '..' + j.sampai).join() === '2026-10-01..2026-10-04,2026-10-05..2026-10-08,2026-10-09..2026-10-10', 'riwayat dibagi per 4 hari');
+const contoh = pilihContohPerkiraan([
+  { id: 1, tanggal: '2026-10-02', tingkat: 'global', indikator: [], articleIds: [1], dampak: [{ teks: 'A panjang', hari: 60 }, { teks: 'A pendek', hari: 7 }] },
+  { id: 2, tanggal: '2026-10-02', tingkat: 'lokal', indikator: [], articleIds: [1, 2], dampak: [{ teks: 'B', hari: 7 }] },
+], 4);
+ok(contoh.length === 2 && contoh[0].teks === 'B' && contoh[1].teks === 'A pendek' && contoh[1].tanggal_cek === '2026-10-09', 'contoh perkiraan: jangka pendek dan berdampak ke Indonesia didahulukan, satu per peristiwa');
+const today = new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
+const mulai = dayStr(Date.parse(today) - 10 * 86400e3);
+[s] = await call('POST', '/api/riwayat', { mulai });
+ok(s === 401, 'penguji tidak bisa mengisi riwayat');
+// Peristiwa "lama" dari pembaruan biasa dipindah ke hari ini supaya riwayat mencakup 10 hari terakhir.
+sq.prepare("UPDATE events SET tanggal = ? WHERE run_id IN (SELECT id FROM runs WHERE trigger IN ('jadwal','manual'))").run(today);
+let [, rw] = await call('POST', '/api/riwayat', { mulai }, OWNER);
+ok(rw.ok && rw.jendela === 3 && rw.sampai === dayStr(Date.parse(today) - 86400e3), 'riwayat: 3 jendela sampai kemarin');
+let [, rw2] = await call('POST', '/api/riwayat', { mulai }, OWNER);
+ok(rw2.jendela === 0 && rw2.dilewati === 3, 'meminta ulang tidak menggandakan jendela');
+const nEvBefore = sq.prepare('SELECT COUNT(*) AS n FROM events').get().n;
+const sigBefore = JSON.stringify((await call('GET', '/api/market'))[1].signals.map((x) => [x.id, x.label]));
+for (let i = 0; i < 3; i++) {
+  const r = await tick();
+  ok(r && r.ok && r.events >= 1, `jendela riwayat ${i + 1} diproses (${r && r.events} peristiwa)`);
+}
+const rwEvents = sq.prepare("SELECT e.* FROM events e JOIN runs r ON r.id = e.run_id WHERE r.trigger = 'riwayat'").all();
+ok(rwEvents.length === sq.prepare('SELECT COUNT(*) AS n FROM events').get().n - nEvBefore && rwEvents.every((e) => e.tanggal >= mulai && e.tanggal < today), 'peristiwa riwayat bertanggal di dalam jendelanya');
+const rwArts = sq.prepare("SELECT a.* FROM articles a JOIN runs r ON r.id = a.run_id WHERE r.trigger = 'riwayat'").all();
+ok(rwArts.some((a) => a.origin === 'lokal' && a.source === 'industri.kontan.co.id') && rwArts.some((a) => a.origin === 'internasional' && a.source === 'reuters.com'), 'riwayat mengambil media lokal dan internasional lewat Google News');
+const sigAfter = JSON.stringify((await call('GET', '/api/market'))[1].signals.map((x) => [x.id, x.label]));
+ok(sigBefore === sigAfter, 'peristiwa riwayat tidak mengacaukan sinyal lonjakan berita hari ini');
+const rwFc = sq.prepare("SELECT * FROM forecasts WHERE asal = 'riwayat'").all();
+ok(rwFc.length >= 3 && rwFc.every((f) => f.tanggal_cek > f.created_at.slice(0, 0)), `contoh perkiraan dari riwayat tercatat (${rwFc.length})`);
+[s, d] = await call('GET', '/api/status', null, OWNER);
+ok(d.riwayat.selesai === 3 && d.riwayat.total === 3 && d.lastRun.trigger !== 'riwayat', 'status: kemajuan riwayat; info pembaruan tetap dari pembaruan biasa');
+[s, d] = await call('GET', '/api/review', null, OWNER);
+const nightlyIds = new Set(d.pending.map((p) => p.id));
+const rwLinkIds = sq.prepare("SELECT l.id FROM links l JOIN runs r ON r.id = l.run_id WHERE r.trigger = 'riwayat' AND l.status = 'usulan'").all().map((r) => r.id);
+ok(rwLinkIds.length >= 1 && d.riwayat.total === rwLinkIds.length && rwLinkIds.every((id) => !nightlyIds.has(id)), 'usulan riwayat punya antrean sendiri, tidak masuk 5 usulan malam ini');
+ok(!d.fresh.some((e) => rwEvents.some((r) => r.id === e.id)), '"peristiwa dari pembaruan terakhir" tidak berisi riwayat');
+const sudahSebelum = d.sudah;
+[s] = await call('POST', '/api/links/' + d.riwayat.pending[0].id, { status: 'disetujui' }, OWNER);
+[s, d] = await call('GET', '/api/review', null, OWNER);
+ok(d.sudah === sudahSebelum && d.riwayat.total === rwLinkIds.length - 1, 'menyetujui usulan riwayat tidak memakan jatah 5 per malam');
+[s, d] = await call('GET', '/api/chains?days=30');
+ok(d.chains.some((c) => c.jalur.some((x) => rwEvents.some((r) => r.id === x.event.id))), 'kaitan riwayat yang disetujui tampil di Rantai');
+// Contoh perkiraan riwayat dicek setelah semua jendela selesai.
+const rc = await tick();
+ok(rc.dicek >= 1, 'contoh perkiraan riwayat dicek otomatis setelah riwayat selesai');
+[s, d] = await call('GET', '/api/forecasts');
+ok(d.forecasts.some((f) => f.asal === 'riwayat' && f.saran), 'contoh perkiraan riwayat punya saran AI');
+// Riwayat tertahan saat kuota AI menipis.
+[, rw] = await call('POST', '/api/riwayat', { mulai: dayStr(Date.parse(mulai) - 8 * 86400e3) }, OWNER);
+sq.prepare("UPDATE ai_usage SET calls = 35 WHERE day = ?").run(today);
+const held = await tick();
+ok(rw.jendela === 2 && !held.runId && sq.prepare("SELECT COUNT(*) AS n FROM runs WHERE trigger = 'riwayat' AND status = 'antre'").get().n === 2, 'riwayat ditunda bila kuota AI tinggal cadangan untuk pembaruan harian');
+[s, d] = await call('GET', '/api/chain/' + evBBM.id);
+ok(Array.isArray(d.tercatat) && d.tercatat.some((t) => t.teks === 'Harga BBM nonsubsidi naik'), 'rantai menyertakan perkiraan yang sudah tercatat');

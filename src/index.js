@@ -1,8 +1,40 @@
-import { runPipeline, enqueueRun, processQueue } from './pipeline.js';
-import { SEKTOR, INDIKATOR, JENIS, AI_DAILY_LIMIT, KELOMPOK, LINTAS_SEKTOR, MAKS_TINJAU } from './constants.js';
+import { runPipeline, enqueueRun, enqueueCekSumber, enqueueRiwayat, statusRiwayat, processQueue } from './pipeline.js';
+import {
+  SEKTOR,
+  INDIKATOR,
+  JENIS,
+  AI_DAILY_LIMIT,
+  KELOMPOK,
+  LINTAS_SEKTOR,
+  MAKS_TINJAU,
+  RSS_FEEDS,
+  GNEWS_TOPIK,
+  SERI_HARGA,
+  RIWAYAT_JENDELA,
+} from './constants.js';
 import { json, parseList, safeEqual, wibDate, wibDateDaysAgo, addDays, nowIso, kelompokOf } from './util.js';
-import { computeSignals } from './market.js';
-import { reviewQueue, decidedToday, poolCount } from './priority.js';
+import { computeSignals, RIWAYAT_HARGA } from './market.js';
+import { reviewQueue, decidedToday, poolCount, historyQueue, riwayatCount } from './priority.js';
+import { forecastOut, ringkasan, KELOMPOK_PERKIRAAN } from './forecast.js';
+
+// Pembaruan biasa (bukan isi riwayat dan bukan cek sumber), untuk info "Diperbarui ...".
+const RUN_BIASA = "trigger IN ('jadwal','manual')";
+
+// Ringkasan sumber data untuk Panduan.
+const SUMBER = {
+  rss_lokal: RSS_FEEDS.filter((f) => f.origin === 'lokal').length,
+  rss_internasional: RSS_FEEDS.filter((f) => f.origin !== 'lokal').length,
+  media_rss: [...new Set(RSS_FEEDS.map((f) => f.source))],
+  topik_id: GNEWS_TOPIK.filter((t) => t.edisi === 'id').length,
+  topik_en: GNEWS_TOPIK.filter((t) => t.edisi !== 'id').length,
+  harga: Object.entries(SERI_HARGA).map(([kode, x]) => ({
+    nama: x.nama,
+    sumber: x.sumber + (RIWAYAT_HARGA[kode] ? ` + riwayat ${RIWAYAT_HARGA[kode].sumber}` : ''),
+  })),
+};
+
+const FC_SQL = `SELECT f.*, e.judul AS event_judul, e.tingkat AS event_tingkat, e.tanggal AS event_tanggal, e.sektor AS event_sektor
+  FROM forecasts f JOIN events e ON e.id = f.event_id`;
 
 const DAILY_CRON = '30 10 * * *';
 
@@ -74,14 +106,14 @@ async function route(request, env) {
 
   // ---------- Status ----------
   if (path === '/api/status' && method === 'GET') {
-    const lastRun = await db.prepare('SELECT * FROM runs ORDER BY id DESC LIMIT 1').first();
+    const lastRun = await db.prepare(`SELECT * FROM runs WHERE ${RUN_BIASA} ORDER BY id DESC LIMIT 1`).first();
     const c = await db
       .prepare(
         `SELECT
           (SELECT COUNT(*) FROM events WHERE status='aktif') AS events,
           (SELECT COUNT(*) FROM links WHERE status='disetujui') AS links_ok,
           (SELECT COUNT(*) FROM links WHERE status='usulan') AS links_pending,
-          (SELECT COUNT(*) FROM forecasts WHERE status='menunggu' AND tanggal_cek <= ?) AS forecasts_due,
+          (SELECT COUNT(*) FROM forecasts WHERE status='menunggu' AND (tanggal_cek <= ? OR saran_status IN ('terjadi','tidak'))) AS forecasts_due,
           (SELECT calls FROM ai_usage WHERE day = ?) AS ai_calls`
       )
       .bind(wibDate(), wibDate())
@@ -91,7 +123,7 @@ async function route(request, env) {
     if (owner) {
       const sudah = await decidedToday(db);
       const kolam = await poolCount(db);
-      tinjau = { maks: MAKS_TINJAU, sudah, sisa: Math.min(Math.max(0, MAKS_TINJAU - sudah), kolam), kolam };
+      tinjau = { maks: MAKS_TINJAU, sudah, sisa: Math.min(Math.max(0, MAKS_TINJAU - sudah), kolam), kolam, riwayat: await riwayatCount(db) };
     }
     return json({
       owner,
@@ -107,6 +139,9 @@ async function route(request, env) {
       signals,
       indikator: INDIKATOR,
       jenis: JENIS,
+      sumber: SUMBER,
+      riwayat: await statusRiwayat(db),
+      riwayatJendela: RIWAYAT_JENDELA,
     });
   }
 
@@ -187,8 +222,8 @@ async function route(request, env) {
       )
       .bind(id, id)
       .all();
-    const fc = await db.prepare('SELECT * FROM forecasts WHERE event_id = ? ORDER BY tanggal_cek').bind(id).all();
-    return json({ event: eventOut(ev), articles: arts.results, links: links.results, forecasts: fc.results });
+    const fc = await db.prepare(`${FC_SQL} WHERE f.event_id = ? ORDER BY f.tanggal_cek`).bind(id).all();
+    return json({ event: eventOut(ev), articles: arts.results, links: links.results, forecasts: fc.results.map((r) => forecastOut(r)) });
   }
 
   if (m && method === 'POST') {
@@ -223,7 +258,14 @@ async function route(request, env) {
     }
     const decorate = (levels) =>
       levels.map((lvl) => lvl.map((n) => ({ event: evMap.get(n.eventId), link: n.link, via: n.via })));
-    return json({ focus: eventOut(focus), up: decorate(up), down: decorate(down) });
+    const nodeIds = [id, ...ids];
+    const tercatat = (
+      await db
+        .prepare(`SELECT event_id, teks FROM forecasts WHERE event_id IN (${nodeIds.map(() => '?').join(',')})`)
+        .bind(...nodeIds)
+        .all()
+    ).results;
+    return json({ focus: eventOut(focus), up: decorate(up), down: decorate(down), tercatat });
   }
 
   // ---------- Tinjauan pemilik ----------
@@ -231,8 +273,8 @@ async function route(request, env) {
     const deny = requireOwner(request, env);
     if (deny) return deny;
     const q = await reviewQueue(db);
-    const lastRun = await db.prepare('SELECT * FROM runs ORDER BY id DESC LIMIT 1').first();
-    const lastOk = await db.prepare('SELECT id FROM runs WHERE n_events > 0 ORDER BY id DESC LIMIT 1').first();
+    const lastRun = await db.prepare(`SELECT * FROM runs WHERE ${RUN_BIASA} ORDER BY id DESC LIMIT 1`).first();
+    const lastOk = await db.prepare(`SELECT id FROM runs WHERE n_events > 0 AND ${RUN_BIASA} ORDER BY id DESC LIMIT 1`).first();
     let fresh = [];
     if (lastOk) {
       const rows = await db
@@ -244,7 +286,22 @@ async function route(request, env) {
         .all();
       fresh = rows.results.map(eventOut);
     }
-    return json({ ...q, lastRun, fresh });
+    const cekSumber = await db.prepare("SELECT * FROM runs WHERE trigger = 'cek-sumber' ORDER BY id DESC LIMIT 1").first();
+    const lastRiwayat = await db.prepare("SELECT * FROM runs WHERE trigger = 'riwayat' AND status IN ('selesai','gagal') ORDER BY id DESC LIMIT 1").first();
+    return json({ ...q, lastRun, fresh, riwayat: await historyQueue(db), riwayatStatus: await statusRiwayat(db), lastRiwayat, cekSumber });
+  }
+
+  if (path === '/api/sumber/cek' && method === 'POST') {
+    const deny = requireOwner(request, env);
+    if (deny) return deny;
+    return json(await enqueueCekSumber(env));
+  }
+
+  if (path === '/api/riwayat' && method === 'POST') {
+    const deny = requireOwner(request, env);
+    if (deny) return deny;
+    const b = await body(request);
+    return json(await enqueueRiwayat(env, String(b.mulai || '')));
   }
 
   if (path === '/api/run' && method === 'POST') {
@@ -350,12 +407,10 @@ async function route(request, env) {
 
   // ---------- Perkiraan ----------
   if (path === '/api/forecasts' && method === 'GET') {
-    const rows = await db
-      .prepare(
-        'SELECT f.*, e.judul AS event_judul, e.tingkat AS event_tingkat FROM forecasts f JOIN events e ON e.id = f.event_id ORDER BY f.tanggal_cek'
-      )
-      .all();
-    return json({ today: wibDate(), forecasts: rows.results });
+    const today = wibDate();
+    const rows = await db.prepare(`${FC_SQL} ORDER BY f.tanggal_cek, f.id`).all();
+    const forecasts = rows.results.map((r) => forecastOut(r, today));
+    return json({ today, forecasts, kelompok: KELOMPOK_PERKIRAAN, ringkasan: ringkasan(forecasts) });
   }
 
   if (path === '/api/forecasts' && method === 'POST') {
@@ -365,13 +420,16 @@ async function route(request, env) {
     const teks = String(b.teks || '').trim().slice(0, 300);
     const eventId = Number(b.event_id);
     if (!teks || !eventId) return json({ error: 'Isi teks perkiraan.' }, 400);
+    // Perkiraan yang sama dari peristiwa yang sama tidak dicatat dua kali.
+    const ada = await db.prepare('SELECT id FROM forecasts WHERE event_id = ? AND teks = ?').bind(eventId, teks).first();
+    if (ada) return json({ ok: true, sudah: true, id: ada.id });
     let tanggal = String(b.tanggal_cek || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) tanggal = addDays(wibDate(), Number(b.hari) || 30);
-    await db
-      .prepare('INSERT INTO forecasts (event_id, teks, tanggal_cek, created_at) VALUES (?, ?, ?, ?)')
+    const row = await db
+      .prepare("INSERT INTO forecasts (event_id, teks, tanggal_cek, created_at, asal) VALUES (?, ?, ?, ?, 'manual') RETURNING id")
       .bind(eventId, teks, tanggal, nowIso())
-      .run();
-    return json({ ok: true });
+      .first();
+    return json({ ok: true, id: row.id });
   }
 
   m = path.match(/^\/api\/forecasts\/(\d+)$/);
@@ -380,10 +438,29 @@ async function route(request, env) {
     if (deny) return deny;
     const b = await body(request);
     if (!['menunggu', 'terjadi', 'tidak'].includes(b.status)) return json({ error: 'Status tidak dikenal.' }, 400);
+    const final = b.status !== 'menunggu';
+    const dengan = final ? (b.dengan === 'saran-ai' ? 'saran-ai' : 'manual') : null;
     await db
-      .prepare('UPDATE forecasts SET status = ?, catatan = ? WHERE id = ?')
-      .bind(b.status, String(b.catatan || '').slice(0, 300), Number(m[1]))
+      .prepare('UPDATE forecasts SET status = ?, catatan = ?, diputuskan_at = ?, diputuskan_dengan = ? WHERE id = ?')
+      .bind(b.status, String(b.catatan || '').slice(0, 300), final ? nowIso() : null, dengan, Number(m[1]))
       .run();
+    return json({ ok: true });
+  }
+
+  // Pemilik meminta saran AI: masuk antrean, diproses jadwal 5 menit berikutnya.
+  m = path.match(/^\/api\/forecasts\/(\d+)\/cek$/);
+  if (m && method === 'POST') {
+    const deny = requireOwner(request, env);
+    if (deny) return deny;
+    await db.prepare("UPDATE forecasts SET cek_diminta = ? WHERE id = ? AND status = 'menunggu'").bind(nowIso(), Number(m[1])).run();
+    return json({ ok: true });
+  }
+
+  m = path.match(/^\/api\/forecasts\/(\d+)\/hapus$/);
+  if (m && method === 'POST') {
+    const deny = requireOwner(request, env);
+    if (deny) return deny;
+    await db.prepare('DELETE FROM forecasts WHERE id = ?').bind(Number(m[1])).run();
     return json({ ok: true });
   }
 

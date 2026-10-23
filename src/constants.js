@@ -85,24 +85,93 @@ export const INDIKATOR_INDONESIA = ['Rupiah', 'IHSG', 'BI Rate'];
 // Kode pengambilnya tetap ada; isi daftar ini untuk mengaktifkannya kembali.
 export const GDELT_QUERIES = [];
 
-// Semua feed di bawah sudah dicek aktif pada 21 Okt 2026.
+// 12 feed pertama sudah dicek aktif pada 21 Okt 2026. Feed tambahan (23 Okt) diperiksa dari
+// Cloudflare lewat tombol "Cek sumber berita"; feed yang gagal hanya dicatat, tidak menghentikan proses.
+// "label" membedakan beberapa feed dari media yang sama di catatan pembaruan.
 export const RSS_FEEDS = [
   // Media Indonesia
-  { url: 'https://www.cnbcindonesia.com/news/rss', source: 'cnbcindonesia.com', origin: 'lokal' },
-  { url: 'https://www.cnbcindonesia.com/market/rss', source: 'cnbcindonesia.com', origin: 'lokal' },
-  { url: 'https://www.cnnindonesia.com/ekonomi/rss', source: 'cnnindonesia.com', origin: 'lokal' },
+  { url: 'https://www.cnbcindonesia.com/news/rss', source: 'cnbcindonesia.com', label: 'CNBC Indonesia news', origin: 'lokal' },
+  { url: 'https://www.cnbcindonesia.com/market/rss', source: 'cnbcindonesia.com', label: 'CNBC Indonesia market', origin: 'lokal' },
+  { url: 'https://www.cnnindonesia.com/ekonomi/rss', source: 'cnnindonesia.com', label: 'CNN Indonesia ekonomi', origin: 'lokal' },
   { url: 'https://finance.detik.com/rss', source: 'detik.com', origin: 'lokal' },
   { url: 'https://feed.liputan6.com/rss/bisnis', source: 'liputan6.com', origin: 'lokal' },
   { url: 'https://www.republika.co.id/rss/ekonomi', source: 'republika.co.id', origin: 'lokal' },
   { url: 'https://sindikasi.okezone.com/index.php/rss/11/RSS2.0', source: 'okezone.com', origin: 'lokal' },
-  { url: 'https://www.antaranews.com/rss/terkini.xml', source: 'antaranews.com', origin: 'lokal' },
+  { url: 'https://www.antaranews.com/rss/terkini.xml', source: 'antaranews.com', label: 'Antara terkini', origin: 'lokal' },
+  // Media Indonesia (tambahan 23 Okt 2026)
+  { url: 'https://www.antaranews.com/rss/ekonomi.xml', source: 'antaranews.com', label: 'Antara ekonomi', origin: 'lokal' },
+  { url: 'https://www.cnnindonesia.com/internasional/rss', source: 'cnnindonesia.com', label: 'CNN Indonesia internasional', origin: 'lokal' },
+  { url: 'https://rss.tempo.co/bisnis', source: 'tempo.co', origin: 'lokal' },
+  { url: 'https://www.suara.com/rss/bisnis', source: 'suara.com', origin: 'lokal' },
   // Media internasional
   { url: 'https://www.aljazeera.com/xml/rss/all.xml', source: 'aljazeera.com', origin: 'internasional' },
   { url: 'https://feeds.npr.org/1006/rss.xml', source: 'npr.org', origin: 'internasional' },
   { url: 'https://oilprice.com/rss/main', source: 'oilprice.com', origin: 'internasional' },
-  { url: 'https://www.investing.com/rss/news_14.rss', source: 'investing.com', origin: 'internasional' },
+  { url: 'https://www.investing.com/rss/news_14.rss', source: 'investing.com', label: 'Investing.com ekonomi', origin: 'internasional' },
+  // Media internasional (tambahan 23 Okt 2026)
+  { url: 'https://www.investing.com/rss/news_11.rss', source: 'investing.com', label: 'Investing.com komoditas', origin: 'internasional' },
+  { url: 'https://feeds.bbci.co.uk/news/business/rss.xml', source: 'bbc.co.uk', origin: 'internasional' },
+  { url: 'https://www.theguardian.com/business/rss', source: 'theguardian.com', origin: 'internasional' },
+  { url: 'https://www.cnbc.com/id/20910258/device/rss/rss.html', source: 'cnbc.com', label: 'CNBC economy', origin: 'internasional' },
+  { url: 'https://rss.dw.com/rdf/rss-en-bus', source: 'dw.com', origin: 'internasional' },
+  { url: 'https://www.mining.com/feed/', source: 'mining.com', origin: 'internasional' },
+  { url: 'https://www.hellenicshippingnews.com/feed/', source: 'hellenicshippingnews.com', origin: 'internasional' },
+  { url: 'https://www.federalreserve.gov/feeds/press_monetary.xml', source: 'federalreserve.gov', origin: 'internasional' },
 ];
 
-// Jumlah maksimum judul berita yang dikirim ke AI per pembaruan.
+// Pencarian topik Google News RSS: menjangkau puluhan media sekaligus (Kontan, Bisnis, Kompas,
+// Reuters, Bloomberg, dst.) dan bisa dibatasi tanggal (after:/before:), sehingga juga dipakai
+// untuk mengisi riwayat. Edisi "id" = media Indonesia, "en" = media internasional.
+export const GNEWS_TOPIK = [
+  { q: '"harga minyak" OR BBM OR Pertamina', edisi: 'id' },
+  { q: 'rupiah OR "BI Rate" OR "Bank Indonesia"', edisi: 'id' },
+  { q: 'inflasi OR "harga pangan" OR beras OR Bulog', edisi: 'id' },
+  { q: 'ekspor OR impor OR "neraca perdagangan" OR tarif', edisi: 'id' },
+  { q: 'nikel OR "batu bara" OR sawit OR "harga emas"', edisi: 'id' },
+  { q: 'IHSG OR "modal asing" OR APBN', edisi: 'id' },
+  { q: '"oil prices" OR OPEC OR Brent', edisi: 'en' },
+  { q: '"Federal Reserve" OR "Treasury yields" OR "dollar index"', edisi: 'en' },
+  { q: 'tariffs OR sanctions OR "trade deal"', edisi: 'en' },
+  { q: 'shipping OR "Red Sea" OR Hormuz OR freight', edisi: 'en' },
+  { q: '"food prices" OR wheat OR rice OR fertilizer', edisi: 'en' },
+  { q: 'Indonesia economy OR rupiah OR Jakarta', edisi: 'en' },
+];
+export const GNEWS_EDISI = {
+  id: { hl: 'id', gl: 'ID', ceid: 'ID:id', origin: 'lokal' },
+  en: { hl: 'en-US', gl: 'US', ceid: 'US:en', origin: 'internasional' },
+};
+export const GNEWS_PER_TOPIK = 20; // judul per topik pada pembaruan harian
+export const RSS_PER_FEED = 20; // cukup karena pemilihan bergiliran hanya mengambil beberapa judul per media
+export const GNEWS_PER_TOPIK_RIWAYAT = 40; // judul per topik untuk satu jendela riwayat
+
+// Media yang dianggap "media Indonesia" walau muncul di edisi internasional, dan sebaliknya.
+// Domain berakhiran .id selalu dianggap media Indonesia.
+export const DOMAIN_INDONESIA = [
+  'cnbcindonesia.com', 'kompas.com', 'kompas.tv', 'detik.com', 'tempo.co', 'liputan6.com', 'okezone.com',
+  'sindonews.com', 'tribunnews.com', 'bisnis.com', 'antaranews.com', 'republika.co.id', 'cnnindonesia.com',
+  'kumparan.com', 'idxchannel.com', 'beritasatu.com', 'suara.com', 'merdeka.com', 'jpnn.com',
+  'bloombergtechnoz.com', 'idntimes.com', 'metrotvnews.com', 'mediaindonesia.com', 'jawapos.com',
+  'thejakartapost.com', 'tvonenews.com', 'emitennews.com', 'viva.co.id', 'kontan.co.id',
+];
+export const DOMAIN_INTERNASIONAL = [
+  'reuters.com', 'bloomberg.com', 'cnbc.com', 'ft.com', 'wsj.com', 'bbc.com', 'bbc.co.uk', 'theguardian.com',
+  'aljazeera.com', 'apnews.com', 'nikkei.com', 'scmp.com', 'channelnewsasia.com', 'investing.com',
+  'oilprice.com', 'marketwatch.com', 'yahoo.com', 'forbes.com', 'economist.com', 'nytimes.com', 'dw.com',
+  'france24.com', 'straitstimes.com', 'cnn.com', 'npr.org',
+];
+
+// Jumlah maksimum judul berita yang dikirim ke AI per pembaruan. Pemilihannya bergiliran per
+// media, supaya media yang sangat sering menulis tidak menenggelamkan media lain.
 export const MAX_LOKAL = 50;
 export const MAX_INTERNASIONAL = 40;
+
+// ---------- Isi riwayat (23 Okt 2026) ----------
+export const RIWAYAT_JENDELA = 4; // hari per giliran; satu giliran = satu pembaruan riwayat
+export const RIWAYAT_MAKS_HARI = 60; // riwayat paling jauh yang boleh diminta
+export const RIWAYAT_PERKIRAAN = 4; // contoh perkiraan otomatis per jendela riwayat
+
+// ---------- Pengecekan perkiraan semi-otomatis (23 Okt 2026) ----------
+export const CEK_PER_GILIRAN = 4; // perkiraan per panggilan AI
+export const AI_CADANGAN = 8; // panggilan AI yang disisakan untuk pembaruan harian
+export const AI_CADANGAN_DIMINTA = 2; // cadangan saat pemilik sendiri meminta pengecekan
+export const CEK_ULANG_HARI = { belum: 3, gagal: 1, mingguan: 7 };

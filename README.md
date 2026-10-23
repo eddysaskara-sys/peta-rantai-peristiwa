@@ -25,9 +25,34 @@ Spesifikasi lengkap ada di `BRIEF.md`. Ringkasnya:
   Brent (API Ninjas), dan lonjakan berita untuk kelompok tanpa data harga. Gerak harga dibanding
   kebiasaan geraknya sendiri (30 hari); data harga tidak ditampilkan sebagai grafik.
 
-- **Sumber berita:** RSS dari 7 media Indonesia (CNBC Indonesia, CNN Indonesia, Detik, Liputan6, Republika, Okezone, Antara) dan 4 media internasional (Al Jazeera, NPR, OilPrice, Investing.com). GDELT sempat dipakai tetapi ditolak dari jaringan Cloudflare, sehingga dinonaktifkan.
+- **Sumber berita:** 12 feed RSS media Indonesia dan 12 feed media internasional (daftar di `src/constants.js`),
+  ditambah 12 topik pencarian **Google News RSS** (6 edisi Indonesia, 6 edisi internasional) yang menjangkau puluhan
+  media lain. Judul dipilih **bergiliran per media** agar media yang sangat sering menulis tidak menenggelamkan yang lain.
+  GDELT sempat dipakai tetapi ditolak dari jaringan Cloudflare, sehingga dinonaktifkan.
+  Tombol **Cek sumber berita** di Tinjau memeriksa semua sumber dari Cloudflare tanpa memakai kuota AI.
+- **Data harga:** kurs USD/IDR (Frankfurter, dengan riwayat), emas (gold-api.com), Brent (API Ninjas untuk harga terakhir,
+  ditambah riwayat harian **FRED/EIA** tanpa key untuk pembanding 30 hari dan bukti perkiraan).
 - **AI:** Cloudflare Workers AI, model utama `@cf/openai/gpt-oss-120b` dengan cadangan `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, dibatasi 40 panggilan per hari agar tetap dalam kuota gratis.
-- **Data:** Cloudflare D1 `peta-rantai-db` (skema di `schema.sql`, sudah dibuat; perubahan skema di folder `migrations/`).
+- **Data:** Cloudflare D1 `peta-rantai-db` (skema di `schema.sql`, sudah dibuat; perubahan skema di folder `migrations/`,
+  dijalankan di D1 produksi sebelum kode yang membutuhkannya di-push).
+
+## Fitur dari masukan pengguna (23 Okt 2026)
+
+- **Panduan:** tab baru dengan dua versi bahasa sederhana, untuk pengunjung (tanpa PIN) dan untuk pemilik (dengan PIN).
+  Pengunjung baru melihat ajakan membuka Panduan di layar Rantai.
+- **Perkiraan dikelompokkan** per 6 kelompok sektor (+ Lintas sektor). Kelompok ditentukan otomatis dari **teks perkiraan**
+  (mis. perkiraan tentang rupiah masuk Keuangan & Moneter), jadi perkiraan baru langsung masuk kelompoknya. Saringan:
+  Perlu keputusan, Menunggu, Selesai. Perkiraan yang sama tidak bisa tercatat dua kali; pemilik bisa menghapus.
+- **Pengecekan semi-otomatis:** AI mengumpulkan bukti (berita tersimpan, pencarian Google News sejak tanggal peristiwa,
+  perubahan harga terkait) lalu memberi **saran** terjadi / tidak / belum, dengan alasan dan tautan bukti. Status akhir
+  hanya berubah bila pemilik menyetujui atau memutuskan sendiri (tombol **Cek sendiri ↗** untuk pengecekan paralel).
+  Aplikasi mencatat seberapa sering saran AI sependapat dengan keputusan pemilik. Pengecekan berjalan tiap 5 menit
+  (saat jatuh tempo, mingguan, atau saat pemilik menekan **Minta saran AI**) dan menyisakan 8 panggilan AI per hari
+  untuk pembaruan harian.
+- **Isi riwayat:** pemilik memilih tanggal mulai (mis. 1 Okt 2026); berita lampau diambil dari Google News per jendela
+  4 hari, disusun menjadi peristiwa, diusulkan kaitannya (antrean **Usulan dari riwayat**, tidak memakai jatah 5 per
+  malam, bisa tersambung ke rantai yang sudah ada), dan beberapa hipotesis dampaknya dicatat sebagai **contoh perkiraan**
+  yang dicek semi-otomatis setelah semua jendela selesai.
 
 ## Alamat aplikasi
 

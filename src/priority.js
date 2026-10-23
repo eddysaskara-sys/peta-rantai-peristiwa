@@ -45,16 +45,57 @@ export function rankProposals(list, ctx) {
 }
 
 /** Jumlah usulan AI yang sudah diputuskan (setujui/tolak) pemilik hari ini (WIB). */
+// Usulan dari isi riwayat punya antrean sendiri dan tidak memakai jatah 5 per malam.
+const BUKAN_RIWAYAT = "(l.run_id IS NULL OR l.run_id NOT IN (SELECT id FROM runs WHERE trigger = 'riwayat'))";
+const RIWAYAT = "l.run_id IN (SELECT id FROM runs WHERE trigger = 'riwayat')";
+
 export async function decidedToday(db, today = wibDate()) {
   const row = await db
-    .prepare("SELECT COUNT(*) AS n FROM links WHERE dibuat_oleh = 'ai' AND status IN ('disetujui','ditolak') AND decided_at >= ?")
+    .prepare(`SELECT COUNT(*) AS n FROM links l WHERE l.dibuat_oleh = 'ai' AND l.status IN ('disetujui','ditolak') AND l.decided_at >= ? AND ${BUKAN_RIWAYAT}`)
     .bind(wibDayStartIso(today))
     .first();
   return row?.n || 0;
 }
 
-const POOL_SQL = `FROM links l JOIN events d ON d.id = l.dari_id JOIN events k ON k.id = l.ke_id
-  WHERE l.status = 'usulan' AND d.status = 'aktif' AND k.status = 'aktif' AND k.tanggal >= ?`;
+const BASE_SQL = `FROM links l JOIN events d ON d.id = l.dari_id JOIN events k ON k.id = l.ke_id
+  WHERE l.status = 'usulan' AND d.status = 'aktif' AND k.status = 'aktif'`;
+const POOL_SQL = `${BASE_SQL} AND ${BUKAN_RIWAYAT} AND k.tanggal >= ?`;
+const RIWAYAT_SQL = `${BASE_SQL} AND ${RIWAYAT}`;
+const PROPOSAL_COLS = `SELECT l.*, d.judul AS dari_judul, d.tingkat AS dari_tingkat, d.tanggal AS dari_tanggal, d.sektor AS dari_sektor,
+              d.indikator AS dari_indikator, d.dua_sisi AS dari_dua_sisi,
+              k.judul AS ke_judul, k.tingkat AS ke_tingkat, k.tanggal AS ke_tanggal, k.sektor AS ke_sektor,
+              k.indikator AS ke_indikator, k.dua_sisi AS ke_dua_sisi`;
+
+function parseProposal(r) {
+  return {
+    ...r,
+    dari_sektor: parseList(r.dari_sektor),
+    ke_sektor: parseList(r.ke_sektor),
+    dari_indikator: parseList(r.dari_indikator),
+    ke_indikator: parseList(r.ke_indikator),
+  };
+}
+
+async function approvedSet(db) {
+  const approved = await db.prepare("SELECT dari_id, ke_id FROM links WHERE status = 'disetujui'").all();
+  return new Set(approved.results.flatMap((r) => [r.dari_id, r.ke_id]));
+}
+
+/** Jumlah usulan dari isi riwayat yang menunggu. */
+export async function riwayatCount(db) {
+  const row = await db.prepare(`SELECT COUNT(*) AS n ${RIWAYAT_SQL}`).first();
+  return row?.n || 0;
+}
+
+/**
+ * Antrean usulan dari isi riwayat: diurutkan dengan aturan prioritas yang sama, tanpa batas per malam.
+ * Sinyal pasar tidak dipakai karena menggambarkan hari ini, bukan tanggal peristiwanya.
+ */
+export async function historyQueue(db, maks = 100) {
+  const rows = await db.prepare(`${PROPOSAL_COLS} ${RIWAYAT_SQL}`).all();
+  const ranked = rankProposals(rows.results.map(parseProposal), { approvedIds: await approvedSet(db), signals: [] });
+  return { pending: ranked.slice(0, maks), total: ranked.length };
+}
 
 /** Jumlah usulan yang masih bersaing (belum tergeser). */
 export async function poolCount(db) {
@@ -68,26 +109,9 @@ export async function poolCount(db) {
  */
 export async function reviewQueue(db, signals = null) {
   const sig = signals || (await computeSignals(db));
-  const rows = await db
-    .prepare(
-      `SELECT l.*, d.judul AS dari_judul, d.tingkat AS dari_tingkat, d.tanggal AS dari_tanggal, d.sektor AS dari_sektor,
-              d.indikator AS dari_indikator, d.dua_sisi AS dari_dua_sisi,
-              k.judul AS ke_judul, k.tingkat AS ke_tingkat, k.tanggal AS ke_tanggal, k.sektor AS ke_sektor,
-              k.indikator AS ke_indikator, k.dua_sisi AS ke_dua_sisi
-       ${POOL_SQL}`
-    )
-    .bind(wibDateDaysAgo(HARI_KOLAM))
-    .all();
-  const pool = rows.results.map((r) => ({
-    ...r,
-    dari_sektor: parseList(r.dari_sektor),
-    ke_sektor: parseList(r.ke_sektor),
-    dari_indikator: parseList(r.dari_indikator),
-    ke_indikator: parseList(r.ke_indikator),
-  }));
-  const approved = await db.prepare("SELECT dari_id, ke_id FROM links WHERE status = 'disetujui'").all();
-  const approvedIds = new Set(approved.results.flatMap((r) => [r.dari_id, r.ke_id]));
-  const ranked = rankProposals(pool, { approvedIds, signals: sig });
+  const rows = await db.prepare(`${PROPOSAL_COLS} ${POOL_SQL}`).bind(wibDateDaysAgo(HARI_KOLAM)).all();
+  const pool = rows.results.map(parseProposal);
+  const ranked = rankProposals(pool, { approvedIds: await approvedSet(db), signals: sig });
   const sudah = await decidedToday(db);
   const slot = Math.max(0, MAKS_TINJAU - sudah);
   const tampil = ranked.slice(0, slot);

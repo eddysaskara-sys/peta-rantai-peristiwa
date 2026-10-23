@@ -188,7 +188,60 @@ Jawab HANYA dengan JSON tanpa teks lain, memakai kode peristiwa (mis. "B1", "L4"
   const user =
     `Peristiwa baru:\n${newEvents.map((e, i) => fmt(e, 'B' + (i + 1))).join('\n')}\n\n` +
     (oldEvents.length
-      ? `Peristiwa lama (30 hari terakhir):\n${oldEvents.map((e, i) => fmt(e, 'L' + (i + 1))).join('\n')}`
+      ? `Peristiwa lain yang sudah tercatat (perhatikan tanggalnya):\n${oldEvents.map((e, i) => fmt(e, 'L' + (i + 1))).join('\n')}`
       : 'Belum ada peristiwa lama.');
   return { system, user };
+}
+
+// ---------- Tahap 3: saran pengecekan perkiraan ----------
+
+export const CEK_SCHEMA = {
+  type: 'object',
+  properties: {
+    cek: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          putusan: { type: 'string', enum: ['terjadi', 'tidak', 'belum'] },
+          keyakinan: { type: 'number' },
+          alasan: { type: 'string' },
+          bukti: { type: 'array', items: { type: 'integer' } },
+        },
+        required: ['id', 'putusan', 'keyakinan', 'alasan', 'bukti'],
+      },
+    },
+  },
+  required: ['cek'],
+};
+
+export function checkPrompt(batch, today) {
+  const system = `Kamu pemeriksa perkiraan ekonomi yang teliti dan berhati-hati. Untuk setiap perkiraan, nilai apakah bukti (judul berita dan data harga) menunjukkan perkiraan itu SUDAH TERJADI setelah tanggal dasarnya.
+Aturan:
+- "terjadi": hanya bila ada judul berita atau data harga yang JELAS menunjukkan hasil yang diperkirakan sudah terjadi: arahnya sama, dan besarannya kira-kira sesuai bila perkiraan menyebut angka.
+- "tidak": hanya bila tanggal cek SUDAH LEWAT dan bukti menunjukkan kebalikannya atau jelas tidak terjadi.
+- "belum": bila bukti belum cukup, hanya tidak langsung, atau tanggal cek belum lewat dan hasilnya belum terlihat. Jika ragu, pilih "belum".
+- Perkiraan bersyarat ("jika ..."): periksa juga syaratnya. Bila syarat tidak terpenuhi, pilih "belum" kecuali tanggal cek sudah lewat.
+- Rencana, wacana, atau prediksi pihak lain BUKAN bukti bahwa sesuatu sudah terjadi.
+- Jangan menambah fakta di luar bukti yang diberikan.
+- "bukti": nomor judul berita yang menjadi dasar putusanmu (kosong bila tidak ada).
+- "alasan": 1 sampai 2 kalimat dalam Bahasa Indonesia, sebut bukti terkuat dan tanggalnya.
+- "keyakinan": angka 0 sampai 1, jujur.
+Jawab HANYA dengan JSON tanpa teks lain, satu entri per perkiraan, dengan bentuk:
+{"cek":[{"id":"P12","putusan":"terjadi|tidak|belum","keyakinan":0.6,"alasan":"","bukti":[1,3]}]}`;
+  const blocks = batch.map((f) => {
+    const b = f.bukti;
+    const berita = b.berita.length
+      ? b.berita.map((a, i) => `${i + 1}. [${a.tanggal} | ${a.sumber}] ${a.judul}`).join('\n')
+      : '(tidak ada berita yang cocok)';
+    const harga = b.harga.length ? b.harga.map((h) => `- ${h}`).join('\n') : '(tidak ada data harga terkait)';
+    return `Perkiraan P${f.id} (dasar: peristiwa ${b.dasar} "${f.event_judul}"; tanggal cek ${f.tanggal_cek}${f.tanggal_cek <= today ? ', SUDAH LEWAT' : ', belum lewat'}):
+"${f.teks}"
+Data harga sejak tanggal dasar:
+${harga}
+Berita sesudah tanggal dasar:
+${berita}`;
+  });
+  return { system, user: `Hari ini: ${today}\n\n${blocks.join('\n\n---\n\n')}` };
 }
