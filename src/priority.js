@@ -91,7 +91,7 @@ export async function riwayatCount(db) {
  * Antrean usulan dari isi riwayat: diurutkan dengan aturan prioritas yang sama, tanpa batas per malam.
  * Sinyal pasar tidak dipakai karena menggambarkan hari ini, bukan tanggal peristiwanya.
  */
-export async function historyQueue(db, maks = 100) {
+export async function historyQueue(db, maks = 300) {
   const rows = await db.prepare(`${PROPOSAL_COLS} ${RIWAYAT_SQL}`).all();
   const ranked = rankProposals(rows.results.map(parseProposal), { approvedIds: await approvedSet(db), signals: [] });
   return { pending: ranked.slice(0, maks), total: ranked.length };

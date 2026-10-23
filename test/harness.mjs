@@ -76,9 +76,10 @@ const gd = (t, i, country) => ({ url: `https://contoh.id/${round}/${t.length}/${
 // Harga: USD/IDR 45 hari kerja bergerak kecil, lalu hari terakhir melonjak 1,5% (gerak tidak biasa).
 const fxRates = {};
 {
-  let v = 17000, d = new Date(Date.now() - 70 * 86400e3);
+  // 46 hari kerja yang berakhir pada hari kerja terakhir (tidak bergantung pada hari tes dijalankan).
+  let v = 17000, d = new Date(Date.now() + 86400e3);
   const days = [];
-  while (days.length < 46) { d = new Date(d.getTime() + 86400e3); if (d.getUTCDay() % 6) days.push(d.toISOString().slice(0, 10)); }
+  while (days.length < 46) { d = new Date(d.getTime() - 86400e3); if (d.getUTCDay() % 6) days.unshift(d.toISOString().slice(0, 10)); }
   days.forEach((day, i) => { v = i === days.length - 1 ? v * 1.015 : v * (1 + (i % 2 ? 0.002 : -0.0018)); fxRates[day] = { IDR: Math.round(v) }; });
 }
 let marketDown = false, gnewsDaily = false, gnewsDown = false, gdeltRiwayatDown = false, fetchLog = [];
@@ -552,3 +553,27 @@ const { gnewsUrl } = await import(ROOT + '/src/sources.js');
 ok(decodeURIComponent(gnewsUrl({ q: 'bbm', edisi: 'id' }, { setelah: '2026-10-02', sebelum: '2026-10-20' })).includes('after:2026-10-02 before:2026-10-20'), 'pencarian bukti daring memakai batas after:/before:');
 const sebar = sebarPerHari([...Array.from({ length: 12 }, (_, i) => ({ published_at: '2026-10-19T0' + (i % 9) + ':00:00Z', skor: 2 })), { published_at: '2026-10-03T01:00:00Z', skor: 1 }, { published_at: '2026-10-08T01:00:00Z', skor: 1 }], 5);
 ok(sebar.length === 5 && sebar[0].published_at.startsWith('2026-10-03') && sebar[1].published_at.startsWith('2026-10-08'), 'bukti dipilih tersebar per hari, bukan menumpuk di ujung rentang');
+
+// ======================= Setujui sekaligus usulan riwayat (24 Okt) =======================
+const rwUsulan = sq.prepare("SELECT l.id FROM links l JOIN runs r ON r.id = l.run_id WHERE r.trigger = 'riwayat' AND l.status = 'usulan'").all().map((x) => x.id);
+const harianUsulan = sq.prepare("SELECT l.id FROM links l WHERE l.status = 'usulan' AND (l.run_id IS NULL OR l.run_id NOT IN (SELECT id FROM runs WHERE trigger = 'riwayat'))").all().map((x) => x.id);
+[s] = await call('POST', '/api/links/riwayat', { setujui: rwUsulan });
+ok(s === 401, 'penguji tidak bisa menyetujui sekaligus');
+[s, d] = await call('POST', '/api/links/riwayat', {}, OWNER);
+ok(s === 400, 'tanpa pilihan ditolak');
+const [, rvBefore] = await call('GET', '/api/review', null, OWNER);
+ok(rvBefore.riwayat.total === rwUsulan.length && rwUsulan.length >= 2, `antrean riwayat lengkap (${rwUsulan.length}) untuk daftar centang`);
+const pilih = rwUsulan.slice(0, rwUsulan.length - 1);
+const sisaRw = rwUsulan.at(-1);
+[s, d] = await call('POST', '/api/links/riwayat', { setujui: [...pilih, ...harianUsulan.slice(0, 2), 999999] }, OWNER);
+ok(s === 200 && d.disetujui === pilih.length, 'setujui sekaligus: hanya usulan riwayat yang berubah');
+ok(harianUsulan.slice(0, 2).every((id) => sq.prepare('SELECT status FROM links WHERE id = ?').get(id).status === 'usulan'), 'usulan harian tidak bisa disetujui lewat jalur riwayat (jatah 5 per malam tetap berlaku)');
+const [, rvAfter] = await call('GET', '/api/review', null, OWNER);
+ok(rvAfter.sudah === rvBefore.sudah && rvAfter.riwayat.total === 1, 'setujui sekaligus tidak memakai jatah malam; sisa 1 usulan riwayat');
+const [, st2] = await call('GET', '/api/status', null, OWNER);
+ok(st2.riwayatCentang === 0.6 && st2.tinjau.riwayat === 1, 'status menyertakan batas centang dan sisa usulan riwayat');
+[s, d] = await call('POST', '/api/links/riwayat', { setujui: [pilih[0]], tolak: [sisaRw, pilih[0]] }, OWNER);
+ok(d.ditolak === 1 && d.disetujui === 0 && sq.prepare('SELECT status FROM links WHERE id = ?').get(sisaRw).status === 'ditolak', 'tolak yang tidak dicentang; yang sudah disetujui tidak berubah');
+const [, ch2] = await call('GET', '/api/chains?days=90');
+const rwEv = new Set(sq.prepare("SELECT e.id FROM events e JOIN runs r ON r.id = e.run_id WHERE r.trigger = 'riwayat'").all().map((x) => x.id));
+ok(ch2.chains.some((c) => c.jalur.some((x) => rwEv.has(x.event.id))), 'setelah disetujui sekaligus, peristiwa riwayat tampil di Rantai');

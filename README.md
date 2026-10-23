@@ -53,6 +53,8 @@ Spesifikasi lengkap ada di `BRIEF.md`. Ringkasnya:
   4 hari, disusun menjadi peristiwa, diusulkan kaitannya (antrean **Usulan dari riwayat**, tidak memakai jatah 5 per
   malam, bisa tersambung ke rantai yang sudah ada), dan beberapa hipotesis dampaknya dicatat sebagai **contoh perkiraan**
   yang dicek semi-otomatis setelah semua jendela selesai.
+  Usulan riwayat ditinjau lewat daftar centang **Setujui sekaligus** (yang keyakinan AI ≥ 60% sudah tercentang);
+  kaitan yang disetujui langsung masuk Rantai.
 
 ## Alamat aplikasi
 

@@ -12,7 +12,6 @@ const state = {
   fcFilter: 'semua',
   fcOpen: new Set(),
   guideMode: '',
-  riwayatShown: 10,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -320,7 +319,6 @@ function riwayatHtml(d) {
       ${jalan ? `<p class="muted small">${jalan} giliran menunggu. Satu giliran diproses tiap ±5 menit selama kuota AI hari ini masih cukup; bila kuota menipis, dilanjutkan besok.</p>` : ''}`;
   }
   const r = d.riwayat || { pending: [], total: 0 };
-  const shown = r.pending.slice(0, state.riwayatShown);
   return `<section class="section" id="riwayat">
     <div class="section-head"><h2>Riwayat</h2><span class="muted small">diambil ${jendela} hari per giliran</span></div>
     <p class="lead">Isi peristiwa sebelum aplikasi dipakai (mis. sejak awal Oktober) dari arsip berita Google News, lengkap dengan usulan kaitan ke rantai dan contoh perkiraan yang bisa dicek apakah sudah terjadi.</p>
@@ -333,10 +331,98 @@ function riwayatHtml(d) {
       </div>
     </div>
     <p id="rw-msg" class="muted small" style="margin-top:8px"></p>
-    <div class="section-head" style="margin-top:20px"><h3>Usulan kaitan dari riwayat (<span id="rw-count">${r.total}</span>)</h3><span class="muted small">Tidak memakai jatah ${d.maks} usulan per malam</span></div>
-    <div id="rw-proposals">${shown.length ? shown.map((p) => proposalHtml(p, true)).join('') : '<div class="empty">Belum ada usulan dari riwayat.</div>'}</div>
-    ${r.pending.length > shown.length ? `<button class="btn ghost" id="rw-more" type="button">Tampilkan 10 berikutnya</button>` : ''}
+    <div class="section-head" style="margin-top:20px"><h3>Usulan kaitan dari riwayat (${r.total})</h3><span class="muted small">Tidak memakai jatah ${d.maks} usulan per malam</span></div>
+    ${r.pending.length ? rwChecklistHtml(r) : `<div class="empty">${st ? '<strong>Semua usulan riwayat sudah diputuskan.</strong>Kaitan yang disetujui sudah tampil di Rantai.' : 'Belum ada usulan dari riwayat.'}</div>`}
   </section>`;
+}
+
+// ---------- Setujui sekaligus (usulan riwayat) ----------
+const rwPct = (x) => Math.round((x || 0) * 100);
+
+function rwChecklistHtml(r) {
+  const batas = state.status.riwayatCentang ?? 0.6;
+  const n = r.pending.length;
+  const nYakin = r.pending.filter((p) => (p.keyakinan || 0) >= batas).length;
+  const nSambung = r.pending.filter((p) => p.lama).length;
+  const row = (p) => {
+    const yakin = (p.keyakinan || 0) >= batas;
+    const label = `Pilih kaitan: ${p.dari_judul} ${p.jenis} ${p.ke_judul}`;
+    return `<li class="rw-row${yakin ? ' on' : ''}">
+      <input type="checkbox" data-rwid="${p.id}" data-yakin="${yakin ? 1 : 0}" data-sambung="${p.lama ? 1 : 0}" aria-label="${esc(label)}" ${yakin ? 'checked' : ''}>
+      <div class="rw-body">
+        <div class="rw-pair">
+          <span>${lvl(p.dari_tingkat)} <span class="muted small">${tgl(p.dari_tanggal)}</span><br><button type="button" class="linklike plainbtn" data-open="${p.dari_id}">${esc(p.dari_judul)}</button></span>
+          <span class="rw-arrow" aria-hidden="true">→</span>
+          <span>${lvl(p.ke_tingkat)} <span class="muted small">${tgl(p.ke_tanggal)}</span><br><button type="button" class="linklike plainbtn" data-open="${p.ke_id}">${esc(p.ke_judul)}</button></span>
+        </div>
+        <p class="small rw-why"><b>${esc(p.jenis)}</b> · ${esc(p.alasan)}</p>
+        <div class="chips"><span class="chip conf${yakin ? ' hi' : ''}">Keyakinan AI ${rwPct(p.keyakinan)}%</span>${p.lama ? '<span class="chip kel">Menyambung rantai</span>' : ''}${p.indonesia ? '<span class="chip">Berdampak ke Indonesia</span>' : ''}</div>
+      </div>
+    </li>`;
+  };
+  return `<p class="lead">Periksa daftar ini, hapus centang pada kaitan yang tidak cocok, lalu setujui sekaligus. Usulan dengan keyakinan AI ≥ ${rwPct(batas)}% sudah tercentang. Klik judul peristiwa untuk membaca beritanya. Yang tidak dicentang tetap menunggu, kecuali Anda menolaknya.</p>
+    <div class="rw-tools" role="group" aria-label="Centang cepat">
+      <span class="small muted">Centang:</span>
+      <button type="button" class="fchip" data-rwpick="yakin">Keyakinan ≥ ${rwPct(batas)}% <span class="muted">${nYakin}</span></button>
+      <button type="button" class="fchip" data-rwpick="sambung">Menyambung rantai <span class="muted">${nSambung}</span></button>
+      <button type="button" class="fchip" data-rwpick="semua">Semua <span class="muted">${n}</span></button>
+      <button type="button" class="fchip" data-rwpick="kosong">Kosongkan</button>
+    </div>
+    <ul class="rw-list">${r.pending.map(row).join('')}</ul>
+    <div class="rw-bar">
+      <span id="rw-sel" class="small"></span>
+      <span class="rw-actions">
+        <button type="button" class="btn ghost small-btn danger" id="rw-reject"></button>
+        <button type="button" class="btn primary" id="rw-approve"></button>
+      </span>
+    </div>`;
+}
+
+function bindRwChecklist(d) {
+  const boxes = [...view.querySelectorAll('[data-rwid]')];
+  if (!boxes.length) return;
+  const approve = $('#rw-approve');
+  const reject = $('#rw-reject');
+  const sync = () => {
+    const on = boxes.filter((b) => b.checked).length;
+    const off = boxes.length - on;
+    boxes.forEach((b) => b.closest('.rw-row').classList.toggle('on', b.checked));
+    $('#rw-sel').textContent = `${on} dari ${boxes.length} dicentang`;
+    approve.textContent = on ? `Setujui ${on} kaitan` : 'Setujui yang dicentang';
+    approve.disabled = !on;
+    reject.textContent = `Tolak ${off} yang tidak dicentang`;
+    reject.disabled = !off;
+  };
+  boxes.forEach((b) => b.addEventListener('change', sync));
+  view.querySelectorAll('[data-rwpick]').forEach((btn) => btn.addEventListener('click', () => {
+    const k = btn.dataset.rwpick;
+    boxes.forEach((b) => (b.checked = k === 'semua' || (k === 'yakin' && b.dataset.yakin === '1') || (k === 'sambung' && b.dataset.sambung === '1')));
+    sync();
+  }));
+  const send = async (payload, pesan) => {
+    approve.disabled = reject.disabled = true;
+    try {
+      const r = await api('/api/links/riwayat', { method: 'POST', body: JSON.stringify(payload) });
+      toast(pesan(r));
+      await loadStatus();
+      await renderTinjau();
+      const sec = $('#riwayat');
+      if (sec) sec.scrollIntoView({ block: 'start' });
+    } catch (e) {
+      toast(e.message);
+      sync();
+    }
+  };
+  approve.addEventListener('click', () => {
+    const ids = boxes.filter((b) => b.checked).map((b) => Number(b.dataset.rwid));
+    send({ setujui: ids }, (r) => `${r.disetujui} kaitan riwayat disetujui dan sudah tampil di Rantai.`);
+  });
+  reject.addEventListener('click', () => {
+    const ids = boxes.filter((b) => !b.checked).map((b) => Number(b.dataset.rwid));
+    if (!confirm(`Tolak ${ids.length} usulan riwayat yang tidak dicentang? Usulan yang ditolak tidak akan tampil lagi.`)) return;
+    send({ tolak: ids }, (r) => `${r.ditolak} usulan riwayat ditolak.`);
+  });
+  sync();
 }
 
 function bindRiwayat(d) {
@@ -354,15 +440,7 @@ function bindRiwayat(d) {
     }
     b.disabled = false;
   });
-  const more = $('#rw-more');
-  if (more) more.addEventListener('click', () => {
-    state.riwayatShown += 10;
-    const box = $('#rw-proposals');
-    box.innerHTML = d.riwayat.pending.slice(0, state.riwayatShown).map((p) => proposalHtml(p, true)).join('');
-    box.querySelectorAll('[data-link-action]').forEach((b) => b.addEventListener('click', decideLink));
-    box.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openEvent(Number(b.dataset.open))));
-    if (state.riwayatShown >= d.riwayat.pending.length) more.remove();
-  });
+  bindRwChecklist(d);
 }
 
 let pollTimer;
@@ -422,15 +500,6 @@ async function decideLink(e) {
     await api(`/api/links/${id}`, { method: 'POST', body: JSON.stringify({ status }) });
     $(`#p-${id}`).remove();
     const d = state.review;
-    if (b.dataset.riwayat) {
-      d.riwayat.pending = d.riwayat.pending.filter((p) => String(p.id) !== String(id));
-      d.riwayat.total -= 1;
-      const c = $('#rw-count');
-      if (c) c.textContent = d.riwayat.total;
-      toast(status === 'disetujui' ? 'Kaitan riwayat disetujui dan tampil di Rantai.' : 'Kaitan riwayat ditolak.');
-      loadStatus();
-      return;
-    }
     if (d) {
       d.pending = d.pending.filter((p) => String(p.id) !== String(id));
       d.sudah += 1;
@@ -642,7 +711,7 @@ async function renderRantaiUtama() {
         <span style="display:flex;gap:8px"><button type="button" class="btn ghost small-btn" id="hint-close">Tutup</button><button type="button" class="btn primary small-btn" id="hint-open">Buka Panduan</button></span></div>`
     : '';
   const riw = state.owner && t && t.riwayat
-    ? `<p class="muted small" style="margin:-12px 0 20px">Ada juga ${t.riwayat} usulan dari riwayat di Tinjau (tidak memakai jatah malam ini).</p>`
+    ? `<p class="muted small" style="margin:-12px 0 20px">Ada juga ${t.riwayat} usulan kaitan dari riwayat${st.riwayat?.mulai ? ` (sejak ${tgl(st.riwayat.mulai)})` : ''} yang belum masuk Rantai. <button type="button" class="linklike plainbtn" id="go-riwayat">Setujui sekaligus di Tinjau</button></p>`
     : '';
   view.innerHTML = `
     ${baru}
@@ -655,6 +724,13 @@ async function renderRantaiUtama() {
     ${pulseHtml(st.signals, false)}`;
   const gt = $('#go-tinjau');
   if (gt) gt.addEventListener('click', () => go('tinjau'));
+  const gr = $('#go-riwayat');
+  if (gr) gr.addEventListener('click', async () => {
+    go('tinjau');
+    for (let i = 0; i < 40 && !$('#riwayat'); i++) await new Promise((r) => setTimeout(r, 100));
+    const sec = $('#riwayat');
+    if (sec) sec.scrollIntoView({ block: 'start' });
+  });
   const ho = $('#hint-open');
   if (ho) {
     ho.addEventListener('click', () => go('panduan'));
@@ -1102,6 +1178,7 @@ function panduanPemilik() {
         <dt>Ambil berita sekarang</dt><dd>Pembaruan di luar jadwal 17.30 WIB. Masuk antrean dan diproses paling lambat 5 menit kemudian.</dd>
         <dt>Cek sumber berita</dt><dd>Memeriksa setiap media dan topik: berapa judul yang didapat dan mana yang gagal. Tidak memakai kuota AI.</dd>
         <dt>Isi riwayat</dt><dd>Mengambil berita lampau sejak tanggal yang Anda pilih (paling jauh 60 hari), 4 hari per giliran. Hasilnya: peristiwa di Linimasa, usulan kaitan riwayat (antrean sendiri, tidak memakai jatah 5 per malam), dan beberapa contoh perkiraan yang dicek AI setelah semua giliran selesai.</dd>
+        <dt>Setujui sekaligus</dt><dd>Usulan kaitan riwayat tampil sebagai daftar centang. Yang keyakinan AI-nya tinggi sudah tercentang; hapus centang yang tidak cocok, lalu klik <b>Setujui</b>. Kaitan yang disetujui langsung masuk ke Rantai, sehingga rantai memanjang mundur ke tanggal riwayat.</dd>
       </dl>
     </div>
     <div class="guide-card">

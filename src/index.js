@@ -11,6 +11,7 @@ import {
   GNEWS_TOPIK,
   SERI_HARGA,
   RIWAYAT_JENDELA,
+  RIWAYAT_CENTANG,
 } from './constants.js';
 import { json, parseList, safeEqual, wibDate, wibDateDaysAgo, addDays, nowIso, kelompokOf } from './util.js';
 import { computeSignals, RIWAYAT_HARGA } from './market.js';
@@ -142,6 +143,7 @@ async function route(request, env) {
       sumber: SUMBER,
       riwayat: await statusRiwayat(db),
       riwayatJendela: RIWAYAT_JENDELA,
+      riwayatCentang: RIWAYAT_CENTANG,
     });
   }
 
@@ -325,6 +327,41 @@ async function route(request, env) {
       .bind(b.status, b.status === 'usulan' ? null : nowIso(), Number(m[1]))
       .run();
     return json({ ok: true });
+  }
+
+  // "Setujui sekaligus" untuk usulan dari isi riwayat. Hanya berlaku untuk usulan riwayat yang masih
+  // berstatus usulan, sehingga jatah 5 keputusan per malam untuk usulan harian tidak bisa dilewati.
+  if (path === '/api/links/riwayat' && method === 'POST') {
+    const deny = requireOwner(request, env);
+    if (deny) return deny;
+    const b = await body(request);
+    const ids = (x) => [...new Set((Array.isArray(x) ? x : []).map(Number).filter((n) => Number.isInteger(n) && n > 0))].slice(0, 500);
+    const setujui = ids(b.setujui);
+    const tolak = ids(b.tolak).filter((id) => !setujui.includes(id));
+    if (!setujui.length && !tolak.length) return json({ error: 'Tidak ada usulan yang dipilih.' }, 400);
+    const now = nowIso();
+    const hasil = { disetujui: 0, ditolak: 0 };
+    for (const [status, list] of [['disetujui', setujui], ['ditolak', tolak]]) {
+      for (let i = 0; i < list.length; i += 90) {
+        const chunk = list.slice(i, i + 90);
+        const ph = chunk.map(() => '?').join(',');
+        const boleh = (
+          await db
+            .prepare(
+              `SELECT id FROM links WHERE status = 'usulan' AND run_id IN (SELECT id FROM runs WHERE trigger = 'riwayat') AND id IN (${ph})`
+            )
+            .bind(...chunk)
+            .all()
+        ).results.map((x) => x.id);
+        if (!boleh.length) continue;
+        await db
+          .prepare(`UPDATE links SET status = ?, decided_at = ? WHERE id IN (${boleh.map(() => '?').join(',')})`)
+          .bind(status, now, ...boleh)
+          .run();
+        hasil[status] += boleh.length;
+      }
+    }
+    return json({ ok: true, ...hasil });
   }
 
   if (path === '/api/links' && method === 'POST') {
