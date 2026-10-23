@@ -10,7 +10,7 @@ const { GNEWS_TOPIK } = await import(ROOT + '/src/constants.js');
 const { kelompokPerkiraan, normalizeChecks, kataKunci } = await import(ROOT + '/src/forecast.js');
 const { bagiJendela, pilihContohPerkiraan, dekatJadwalHarian } = await import(ROOT + '/src/pipeline.js');
 const { priceChange } = await import(ROOT + '/src/market.js');
-const { kumpulkanBukti, hargaKalimat } = await import(ROOT + '/src/forecast.js');
+const { kumpulkanBukti, hargaKalimat, sebarPerHari } = await import(ROOT + '/src/forecast.js');
 const { priceSignal, newsSignals } = await import(ROOT + '/src/market.js');
 const { rankProposals } = await import(ROOT + '/src/priority.js');
 
@@ -550,3 +550,5 @@ const bk = await kumpulkanBukti(DB, { id: 999, event_id: evOld, event_tanggal: d
 ok(bk.sampai && bk.berita.some((b) => /naik tajam/.test(b.judul)) && !bk.berita.some((b) => /turun lagi/.test(b.judul)), 'berita sesudah tanggal cek (+3 hari) tidak dipakai sebagai bukti');
 const { gnewsUrl } = await import(ROOT + '/src/sources.js');
 ok(decodeURIComponent(gnewsUrl({ q: 'bbm', edisi: 'id' }, { setelah: '2026-10-02', sebelum: '2026-10-20' })).includes('after:2026-10-02 before:2026-10-20'), 'pencarian bukti daring memakai batas after:/before:');
+const sebar = sebarPerHari([...Array.from({ length: 12 }, (_, i) => ({ published_at: '2026-10-19T0' + (i % 9) + ':00:00Z', skor: 2 })), { published_at: '2026-10-03T01:00:00Z', skor: 1 }, { published_at: '2026-10-08T01:00:00Z', skor: 1 }], 5);
+ok(sebar.length === 5 && sebar[0].published_at.startsWith('2026-10-03') && sebar[1].published_at.startsWith('2026-10-08'), 'bukti dipilih tersebar per hari, bukan menumpuk di ujung rentang');

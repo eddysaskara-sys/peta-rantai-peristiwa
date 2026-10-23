@@ -168,7 +168,7 @@ export async function kumpulkanBukti(db, f, { cariOnline = true, today = wibDate
   }
   const pl = pola.map((p) => ' ' + p + ' ');
   const seen = new Set();
-  const berita = kandidat
+  const cocok = kandidat
     .filter((a) => {
       const tgl = String(a.published_at || '').slice(0, 10);
       if (tgl && (tgl < dasar || (sampai && tgl > sampai))) return false;
@@ -181,17 +181,39 @@ export async function kumpulkanBukti(db, f, { cariOnline = true, today = wibDate
       const t = normText(a.title);
       return { ...a, skor: pl.filter((p) => t.includes(p)).length };
     })
-    .filter((a) => a.skor > 0)
-    .sort((a, b) => b.skor - a.skor || String(b.published_at).localeCompare(String(a.published_at)))
-    .slice(0, 10)
-    .sort((a, b) => String(a.published_at).localeCompare(String(b.published_at)))
-    .map((a) => ({ judul: a.title, url: a.url, sumber: a.source, asal: a.origin, tanggal: String(a.published_at || '').slice(0, 10) }));
+    .filter((a) => a.skor > 0);
+  const berita = sebarPerHari(cocok, 10).map((a) => ({
+    judul: a.title,
+    url: a.url,
+    sumber: a.source,
+    asal: a.origin,
+    tanggal: String(a.published_at || '').slice(0, 10),
+  }));
   const harga = [];
   for (const kode of seriTerkait(f.teks)) {
     const c = await priceChange(db, kode, dasar, lewat ? f.tanggal_cek : null);
     if (c) harga.push(hargaKalimat(c));
   }
   return { dasar, sampai, berita, harga, online };
+}
+
+/**
+ * Pilih bukti tersebar sepanjang rentang: bergiliran per hari (paling cocok dulu di tiap hari),
+ * supaya perkiraan "dalam N hari" tidak hanya dinilai dari berita di ujung rentang. Urut kronologis.
+ */
+export function sebarPerHari(list, maks) {
+  const byDay = new Map();
+  for (const a of [...list].sort((x, y) => y.skor - x.skor)) {
+    const d = String(a.published_at || '').slice(0, 10);
+    if (!byDay.has(d)) byDay.set(d, []);
+    byDay.get(d).push(a);
+  }
+  const days = [...byDay.keys()].sort();
+  const out = [];
+  while (out.length < maks && days.some((d) => byDay.get(d).length)) {
+    for (const d of days) if (out.length < maks && byDay.get(d).length) out.push(byDay.get(d).shift());
+  }
+  return out.sort((a, b) => String(a.published_at).localeCompare(String(b.published_at)));
 }
 
 // ---------- Saran AI ----------
@@ -288,7 +310,7 @@ export async function checkForecasts(env, { maks = CEK_PER_GILIRAN, riwayatSeles
   await db.batch(
     batch.map((f) => {
       const h = hasil.get(f.id);
-      const bukti = JSON.stringify({ berita: f.bukti.berita, harga: f.bukti.harga, dipakai: h ? h.dipakai : [], dasar: f.bukti.dasar, sampai: f.bukti.sampai });
+      const bukti = JSON.stringify({ berita: f.bukti.berita, harga: f.bukti.harga, dipakai: h ? h.dipakai : [], dasar: f.bukti.dasar, sampai: f.bukti.sampai, online: f.bukti.online });
       return db
         .prepare(
           'UPDATE forecasts SET saran_status = ?, saran_alasan = ?, saran_keyakinan = ?, saran_bukti = ?, saran_at = ?, cek_diminta = NULL WHERE id = ?'
