@@ -75,7 +75,7 @@ const fxRates = {};
   while (days.length < 46) { d = new Date(d.getTime() + 86400e3); if (d.getUTCDay() % 6) days.push(d.toISOString().slice(0, 10)); }
   days.forEach((day, i) => { v = i === days.length - 1 ? v * 1.015 : v * (1 + (i % 2 ? 0.002 : -0.0018)); fxRates[day] = { IDR: Math.round(v) }; });
 }
-let marketDown = false, gnewsDaily = false, fetchLog = [];
+let marketDown = false, gnewsDaily = false, gnewsDown = false, fetchLog = [];
 const dayStr = (ms) => new Date(ms).toISOString().slice(0, 10);
 const fredCsv = () => {
   let out = 'observation_date,DCOILBRENTEU\n';
@@ -111,7 +111,10 @@ globalThis.fetch = async (url, opts = {}) => {
   url = String(url);
   fetchLog.push(url);
   if (url.includes('fredgraph')) return marketDown ? new Response('err', { status: 503 }) : new Response(fredCsv());
-  if (url.includes('news.google.com/rss/search')) return new Response(`<rss><channel>${gnewsMock(url)}</channel></rss>`);
+  if (url.includes('news.google.com/rss/search')) {
+    if (gnewsDown) return new Response('unusual traffic', { status: 503 });
+    return new Response(`<rss><channel>${gnewsMock(url)}</channel></rss>`);
+  }
   if (url.includes('frankfurter')) return marketDown ? new Response('err', { status: 503 }) : new Response(JSON.stringify({ base: 'USD', rates: fxRates }));
   if (url.includes('gold-api')) return new Response(JSON.stringify({ name: 'Gold', price: 4069.8, symbol: 'XAU', updatedAt: new Date().toISOString() }));
   if (url.includes('api-ninjas')) {
@@ -444,9 +447,24 @@ let [, rw2] = await call('POST', '/api/riwayat', { mulai }, OWNER);
 ok(rw2.jendela === 0 && rw2.dilewati === 3, 'meminta ulang tidak menggandakan jendela');
 const nEvBefore = sq.prepare('SELECT COUNT(*) AS n FROM events').get().n;
 const sigBefore = JSON.stringify((await call('GET', '/api/market'))[1].signals.map((x) => [x.id, x.label]));
+const mundurkanRiwayat = () => sq.prepare("UPDATE runs SET finished_at = ? WHERE trigger = 'riwayat' AND finished_at IS NOT NULL").run(new Date(Date.now() - 20 * 60e3).toISOString());
+// Google News menolak: jendela dijadwalkan ulang, bukan dianggap selesai.
+gnewsDown = true;
+fetchLog = [];
+const tolak = await tick();
+const rowTolak = sq.prepare('SELECT * FROM runs WHERE id = ?').get(tolak.runId);
+ok(tolak.percobaan === 1 && rowTolak.status === 'antre' && rowTolak.started_at > new Date().toISOString() && /percobaan=1/.test(rowTolak.note), 'riwayat yang ditolak Google News dijadwalkan ulang 30 menit lagi');
+ok(fetchLog.filter((u) => u.includes('news.google.com')).length === 3, 'berhenti setelah 3 penolakan berturut-turut');
+gnewsDown = false;
 for (let i = 0; i < 3; i++) {
+  mundurkanRiwayat();
+  if (i === 2) sq.prepare("UPDATE runs SET started_at = ? WHERE id = ?").run(new Date(Date.now() - 60e3).toISOString(), tolak.runId);
   const r = await tick();
   ok(r && r.ok && r.events >= 1, `jendela riwayat ${i + 1} diproses (${r && r.events} peristiwa)`);
+  if (i === 0) {
+    const jeda = await tick();
+    ok(!jeda.runId, 'giliran riwayat berikutnya menunggu jeda 15 menit');
+  }
 }
 const rwEvents = sq.prepare("SELECT e.* FROM events e JOIN runs r ON r.id = e.run_id WHERE r.trigger = 'riwayat'").all();
 ok(rwEvents.length === sq.prepare('SELECT COUNT(*) AS n FROM events').get().n - nEvBefore && rwEvents.every((e) => e.tanggal >= mulai && e.tanggal < today), 'peristiwa riwayat bertanggal di dalam jendelanya');
@@ -478,6 +496,7 @@ ok(d.forecasts.some((f) => f.asal === 'riwayat' && f.saran), 'contoh perkiraan r
 // Riwayat tertahan saat kuota AI menipis.
 [, rw] = await call('POST', '/api/riwayat', { mulai: dayStr(Date.parse(mulai) - 8 * 86400e3) }, OWNER);
 sq.prepare("UPDATE ai_usage SET calls = 35 WHERE day = ?").run(today);
+mundurkanRiwayat();
 const held = await tick();
 ok(rw.jendela === 2 && !held.runId && sq.prepare("SELECT COUNT(*) AS n FROM runs WHERE trigger = 'riwayat' AND status = 'antre'").get().n === 2, 'riwayat ditunda bila kuota AI tinggal cadangan untuk pembaruan harian');
 [s, d] = await call('GET', '/api/chain/' + evBBM.id);

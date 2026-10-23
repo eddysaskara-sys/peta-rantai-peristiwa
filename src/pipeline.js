@@ -10,6 +10,9 @@ import {
   RIWAYAT_JENDELA,
   RIWAYAT_MAKS_HARI,
   RIWAYAT_PERKIRAAN,
+  RIWAYAT_JEDA_MENIT,
+  RIWAYAT_ULANG_MENIT,
+  RIWAYAT_MAKS_COBA,
   INDIKATOR_INDONESIA,
 } from './constants.js';
 import { wibDate, wibDateDaysAgo, nowIso, parseList, matchLabels, addDays } from './util.js';
@@ -69,6 +72,8 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
       );
     }
     if (fresh.length < 3) {
+      // Riwayat yang gagal karena sumber menolak dijadwalkan ulang, bukan dianggap selesai.
+      if (jendela && errors.length) return jadwalUlangRiwayat(db, runId, jendela, notes);
       await finish(db, runId, 'selesai', { n_articles: fresh.length }, [...notes, 'Tidak ada berita baru yang cukup.']);
       return { ok: true, runId, articles: fresh.length, events: 0, links: 0 };
     }
@@ -195,6 +200,22 @@ export async function enqueueCekSumber(env) {
   return { ok: true, runId: row.id, already: false };
 }
 
+/** Kembalikan jendela riwayat ke antrean, paling cepat RIWAYAT_ULANG_MENIT lagi (maks. RIWAYAT_MAKS_COBA kali). */
+async function jadwalUlangRiwayat(db, runId, jendela, notes) {
+  const row = await db.prepare('SELECT note FROM runs WHERE id = ?').bind(runId).first();
+  const coba = (Number(/percobaan=(\d+)/.exec(row?.note || '')?.[1]) || 0) + 1;
+  if (coba >= RIWAYAT_MAKS_COBA) {
+    await finish(db, runId, 'gagal', {}, [...notes, `Sumber menolak ${coba} kali; tekan "Isi riwayat" lagi nanti.`]);
+    return { ok: false, runId, message: 'riwayat gagal setelah beberapa kali dicoba' };
+  }
+  const nanti = new Date(Date.now() + RIWAYAT_ULANG_MENIT * 60000).toISOString();
+  await db
+    .prepare("UPDATE runs SET status = 'antre', started_at = ?, note = ? WHERE id = ?")
+    .bind(nanti, `${penandaJendela(jendela)} percobaan=${coba}\n${notes.slice(1).join('\n')}`.slice(0, 2000), runId)
+    .run();
+  return { ok: false, runId, ulang: nanti, percobaan: coba };
+}
+
 export function penandaJendela(j) {
   return `riwayat=${j.mulai}..${j.sampai}`;
 }
@@ -278,15 +299,23 @@ export async function processQueue(env) {
     .run();
   const busy = await db.prepare("SELECT id FROM runs WHERE status = 'berjalan' LIMIT 1").first();
   if (!busy) {
+    // started_at pada antrean = paling cepat boleh dijalankan (dipakai untuk menjadwal ulang riwayat).
     const q = await db
-      .prepare("SELECT id, trigger, note FROM runs WHERE status = 'antre' ORDER BY CASE trigger WHEN 'riwayat' THEN 1 ELSE 0 END, id LIMIT 1")
+      .prepare(
+        "SELECT id, trigger, note FROM runs WHERE status = 'antre' AND started_at <= ? ORDER BY CASE trigger WHEN 'riwayat' THEN 1 ELSE 0 END, id LIMIT 1"
+      )
+      .bind(nowIso())
       .first();
     if (q && q.trigger === 'cek-sumber') return runCekSumber(env, q.id);
     if (q && q.trigger === 'riwayat') {
-      if ((await aiCallsToday(db)) <= AI_DAILY_LIMIT - AI_CADANGAN) {
+      const terakhir = await db
+        .prepare("SELECT finished_at FROM runs WHERE trigger = 'riwayat' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1")
+        .first();
+      const jedaCukup = !terakhir || Date.parse(terakhir.finished_at) <= Date.now() - RIWAYAT_JEDA_MENIT * 60000;
+      if (jedaCukup && (await aiCallsToday(db)) <= AI_DAILY_LIMIT - AI_CADANGAN) {
         return runPipeline(env, { trigger: 'riwayat', runId: q.id, jendela: parseJendela(q.note) });
       }
-      // Kuota AI hari ini disisakan untuk pembaruan harian; riwayat dilanjutkan besok.
+      // Menunggu jeda antar giliran, atau kuota AI hari ini disisakan untuk pembaruan harian.
     } else if (q) {
       const days = Number(/days=(\d+)/.exec(q.note || '')?.[1]) || 1;
       return runPipeline(env, { trigger: 'manual', days, runId: q.id });

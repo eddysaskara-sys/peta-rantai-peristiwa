@@ -8,6 +8,7 @@ import {
   GNEWS_PER_TOPIK,
   GNEWS_PER_TOPIK_RIWAYAT,
   RSS_PER_FEED,
+  GNEWS_JEDA_MS,
   DOMAIN_INDONESIA,
   DOMAIN_INTERNASIONAL,
 } from './constants.js';
@@ -49,19 +50,40 @@ export async function collectHeadlines(opts = {}) {
         })
       );
 
-  const gnewsPromise = Promise.all(
-    GNEWS_TOPIK.map(async (t, i) => {
-      const name = `Google News ${t.edisi.toUpperCase()} #${i + 1}`;
-      try {
-        const items = await fetchGnews(t, jendela ? { jendela } : { days });
-        stats.push(`${name}: ${items.length}`);
-        return items;
-      } catch (e) {
-        errors.push(`${name}: ${String(e.message || e).slice(0, 80)}`);
-        return [];
+  // Pembaruan biasa: semua topik sekaligus. Riwayat: berurutan dengan jeda, dan berhenti bila
+  // Google News menolak beberapa kali berturut-turut agar tidak memperparah pembatasan.
+  const ambilTopik = async (t, i) => {
+    const name = `Google News ${t.edisi.toUpperCase()} #${i + 1}`;
+    try {
+      const items = await fetchGnews(t, jendela ? { jendela } : { days });
+      stats.push(`${name}: ${items.length}`);
+      return items;
+    } catch (e) {
+      errors.push(`${name}: ${String(e.message || e).slice(0, 80)}`);
+      return null;
+    }
+  };
+  let gnewsPromise;
+  if (!jendela) {
+    gnewsPromise = Promise.all(GNEWS_TOPIK.map((t, i) => ambilTopik(t, i).then((x) => x || [])));
+  } else {
+    gnewsPromise = (async () => {
+      const out = [];
+      let tolak = 0;
+      for (let i = 0; i < GNEWS_TOPIK.length; i++) {
+        if (i > 0) await sleep(GNEWS_JEDA_MS);
+        const items = await ambilTopik(GNEWS_TOPIK[i], i);
+        if (items) {
+          tolak = 0;
+          out.push(items);
+        } else if (++tolak >= 3) {
+          errors.push('Google News menolak 3 kali berturut-turut; topik lain dilewati.');
+          break;
+        }
       }
-    })
-  );
+      return out;
+    })();
+  }
 
   // GDELT membatasi kira-kira 1 permintaan per 5 detik per alamat IP. Alamat IP Cloudflare
   // dipakai bersama banyak pengguna, jadi diberi jeda lebih lama dan satu kali coba ulang.

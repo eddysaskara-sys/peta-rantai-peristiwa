@@ -168,6 +168,12 @@ export const MAX_INTERNASIONAL = 40;
 export const RIWAYAT_JENDELA = 4; // hari per giliran; satu giliran = satu pembaruan riwayat
 export const RIWAYAT_MAKS_HARI = 60; // riwayat paling jauh yang boleh diminta
 export const RIWAYAT_PERKIRAAN = 4; // contoh perkiraan otomatis per jendela riwayat
+// Google News menolak (HTTP 503) bila terlalu banyak permintaan dari Cloudflare dalam waktu singkat
+// (uji 23 Okt: setelah ±36 permintaan dalam 10 menit). Karena itu riwayat diambil pelan-pelan.
+export const RIWAYAT_JEDA_MENIT = 15; // jeda antar giliran riwayat
+export const RIWAYAT_ULANG_MENIT = 30; // giliran yang ditolak Google News dicoba lagi setelah ini
+export const RIWAYAT_MAKS_COBA = 4;
+export const GNEWS_JEDA_MS = 500; // jeda antar permintaan Google News pada riwayat
 
 // ---------- Pengecekan perkiraan semi-otomatis (23 Okt 2026) ----------
 export const CEK_PER_GILIRAN = 4; // perkiraan per panggilan AI
