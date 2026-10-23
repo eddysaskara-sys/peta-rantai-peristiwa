@@ -13,6 +13,8 @@ const { priceChange } = await import(ROOT + '/src/market.js');
 const { kumpulkanBukti, hargaKalimat, sebarPerHari } = await import(ROOT + '/src/forecast.js');
 const { priceSignal, newsSignals } = await import(ROOT + '/src/market.js');
 const { rankProposals } = await import(ROOT + '/src/priority.js');
+const { MAKS_TINJAU } = await import(ROOT + '/src/constants.js');
+const { normalizeScan } = await import(ROOT + '/src/pipeline.js');
 
 // ---- D1 tiruan ----
 const sq = new DatabaseSync(':memory:');
@@ -32,12 +34,25 @@ const DB = {
 };
 
 // ---- AI tiruan ----
-let aiCalls = 0, failSchemaOnce = true, lastCheckPrompt = '';
+let aiCalls = 0, failSchemaOnce = true, lastCheckPrompt = '', lastScanPrompt = '', lastLinkPrompt = '';
 const AI = {
   async run(model, input) {
     aiCalls++;
     if (failSchemaOnce) { failSchemaOnce = false; throw new Error('model sibuk'); }
     const u = input.messages[1].content;
+    if (u.startsWith('Peristiwa (urut tanggal)')) {
+      lastScanPrompt = u;
+      const n = (u.match(/^E\d+ /gm) || []).length;
+      return { response: { kaitan: [
+        { dari: 'E1', ke: 'E' + n, jenis: 'memperkuat', alasan: 'Sebab lama memperkuat akibat terbaru.', keyakinan: 0.8 },
+        { dari: 'E2', ke: 'E' + n, jenis: 'menyebabkan', alasan: 'Sebab lama kedua.', keyakinan: 0.6 },
+        { dari: 'E' + n, ke: 'E1', jenis: 'menyebabkan', alasan: 'terbalik: akibat lebih awal dari sebab', keyakinan: 0.9 },
+        { dari: 'E1', ke: 'E1', jenis: 'menyebabkan', alasan: 'diri sendiri', keyakinan: 0.9 },
+        { dari: 'E999', ke: 'E2', jenis: 'menyebabkan', alasan: 'kode palsu', keyakinan: 0.9 },
+        { dari: 'E1', ke: 'E' + n, jenis: 'menyebabkan', alasan: 'ganda', keyakinan: 0.9 },
+      ] } };
+    }
+    if (u.startsWith('Peristiwa baru')) lastLinkPrompt = u;
     if (u.startsWith('Hari ini:')) {
       lastCheckPrompt = u;
       const cek = [...u.matchAll(/Perkiraan P(\d+)[^\n]*\n"([^"]*)"/g)].map(([, id, teks]) =>
@@ -277,17 +292,17 @@ for (let i = 0; i < evIds.length; i++) for (let j = 0; j < evIds.length; j++) if
 [s, d] = await call('GET', '/api/review', null, 'rahasia123');
 const kolam = d.pending.length + d.menunggu;
 // Satu kaitan sudah disetujui hari ini di uji sebelumnya, jadi slot malam ini tinggal 4.
-ok(d.sudah === 1 && d.slot === 4 && d.pending.length === 4 && d.menunggu === kolam - 4 && kolam > 5, `tinjau: hanya 5 keputusan per malam (1 sudah, 4 dari ${kolam} usulan tampil)`);
+ok(d.sudah === 1 && d.slot === MAKS_TINJAU - 1 && d.pending.length === MAKS_TINJAU - 1 && d.menunggu === kolam - (MAKS_TINJAU - 1) && kolam > MAKS_TINJAU, `tinjau: hanya ${MAKS_TINJAU} keputusan per malam (1 sudah, ${MAKS_TINJAU - 1} dari ${kolam} usulan tampil)`);
 ok(d.pending.every((p, i, a) => i === 0 || a[i - 1].skor >= p.skor), 'tinjau: urut menurut skor prioritas');
 for (const p of d.pending.slice(0, 2)) await call('POST', '/api/links/' + p.id, { status: p.id % 2 ? 'disetujui' : 'ditolak' }, 'rahasia123');
 [s, d] = await call('GET', '/api/review', null, 'rahasia123');
-ok(d.pending.length === 2 && d.sudah === 3, 'setelah 2 keputusan lagi, sisa slot malam ini 2');
+ok(d.pending.length === MAKS_TINJAU - 3 && d.sudah === 3, `setelah 2 keputusan lagi, sisa slot malam ini ${MAKS_TINJAU - 3}`);
 [s, d] = await call('GET', '/api/status', null, 'rahasia123');
-ok(d.tinjau.sisa === 2 && d.tinjau.maks === 5, 'status: lencana Tinjau menunjukkan sisa 2');
+ok(d.tinjau.sisa === MAKS_TINJAU - 3 && d.tinjau.maks === MAKS_TINJAU && MAKS_TINJAU > 5, `status: lencana Tinjau menunjukkan sisa ${MAKS_TINJAU - 3} (batas malam ${MAKS_TINJAU}, bukan 5)`);
 const anyDecided = sq.prepare("SELECT id FROM links WHERE decided_at IS NOT NULL AND dibuat_oleh='ai' ORDER BY decided_at DESC, id DESC LIMIT 1").get().id;
 await call('POST', '/api/links/' + anyDecided, { status: 'usulan' }, 'rahasia123');
 [s, d] = await call('GET', '/api/review', null, 'rahasia123');
-ok(d.sudah === 2 && d.pending.length === 3, 'membatalkan keputusan mengembalikan slotnya');
+ok(d.sudah === 2 && d.pending.length === MAKS_TINJAU - 2, 'membatalkan keputusan mengembalikan slotnya');
 [s, d] = await call('GET', '/api/status');
 ok(d.tinjau === null && Array.isArray(d.signals) && d.kelompok.length === 6, 'status publik: tanpa info tinjauan, dengan sinyal dan kelompok');
 
@@ -343,8 +358,13 @@ ok(daily.ok === true, 'jadwal harian berjalan');
 let p3; await worker.scheduled({ cron: '*/5 * * * *' }, env, { waitUntil(x) { p3 = x; } }); const fromQ = await p3;
 ok(fromQ && fromQ.runId === q1.runId, 'antrean diproses oleh jadwal 5 menit');
 let p4; await worker.scheduled({ cron: '*/5 * * * *' }, env, { waitUntil(x) { p4 = x; } });
-const idle = await p4;
-ok(idle && idle.dicek === 0 && !idle.runId, 'jadwal 5 menit tanpa antrean dan tanpa perkiraan yang perlu dicek tidak melakukan apa-apa');
+const scanHarian = await p4;
+const scanRow = sq.prepare('SELECT * FROM runs WHERE id = ?').get(scanHarian.runId);
+ok(scanHarian.ok && scanRow.trigger === 'kaitan' && scanRow.status === 'selesai' && /otomatis/.test(scanRow.note), 'tanpa antrean: cari kaitan terbesar berjalan otomatis setelah pembaruan hari ini');
+ok(scanHarian.links === 2, `pemindaian otomatis menambah 2 usulan kaitan (${scanHarian.links})`);
+let p5; await worker.scheduled({ cron: '*/5 * * * *' }, env, { waitUntil(x) { p5 = x; } });
+const idle = await p5;
+ok(idle && idle.dicek === 0 && !idle.runId, 'pemindaian otomatis hanya sekali sehari; tanpa antrean dan perkiraan jatuh tempo tidak melakukan apa-apa');
 
 
 // ======================= Masukan pengguna 23 Okt 2026 =======================
@@ -577,3 +597,48 @@ ok(d.ditolak === 1 && d.disetujui === 0 && sq.prepare('SELECT status FROM links 
 const [, ch2] = await call('GET', '/api/chains?days=90');
 const rwEv = new Set(sq.prepare("SELECT e.id FROM events e JOIN runs r ON r.id = e.run_id WHERE r.trigger = 'riwayat'").all().map((x) => x.id));
 ok(ch2.chains.some((c) => c.jalur.some((x) => rwEv.has(x.event.id))), 'setelah disetujui sekaligus, peristiwa riwayat tampil di Rantai');
+
+// ======================= Cari kaitan terbesar + batas tinjauan (24 Okt) =======================
+// unit: kriteria "sebab dari tanggal lebih awal"
+const rj = rankProposals([
+  { ...base, id: 11, dari_id: 31, ke_id: 32, ke_tingkat: 'global', dari_tanggal: '2026-10-01', ke_tanggal: '2026-10-20' },
+  { ...base, id: 12, dari_id: 33, ke_id: 34, ke_tingkat: 'global', dari_tanggal: '2026-10-18', ke_tanggal: '2026-10-20' },
+], { approvedIds: new Set(), signals: [] });
+ok(rj[0].id === 11 && rj[0].skor === 1 && rj[0].alasan_prioritas.includes('Sebab dari 19 hari sebelumnya') && rj[1].skor === 0, 'prioritas: sebab dari >= 7 hari sebelumnya mendapat 1 poin');
+
+// unit: normalizeScan
+const evs = [{ id: 1, tanggal: '2026-10-01' }, { id: 2, tanggal: '2026-10-05' }, { id: 3, tanggal: '2026-10-20' }];
+const ns2 = normalizeScan({ kaitan: [
+  { dari: 'E1', ke: 'E3', jenis: 'x', alasan: 'a', keyakinan: 3 },
+  { dari: 'E3', ke: 'E2', jenis: 'menyebabkan', alasan: 'terbalik', keyakinan: 0.5 },
+  { dari: 'E2', ke: 'E3', jenis: 'meredam', alasan: 'sudah ada', keyakinan: 0.5 },
+  { dari: 'e1', ke: 'E2', jenis: 'memperkuat', alasan: 'b', keyakinan: 0.4 },
+  { dari: 'E3', ke: 'E1', jenis: 'menyebabkan', alasan: 'ganda terbalik', keyakinan: 0.5 },
+] }, evs, new Set(['2-3', '3-2']));
+ok(ns2.length === 2 && ns2[0].dari === 1 && ns2[0].ke === 3 && ns2[0].jenis === 'menyebabkan' && ns2[0].keyakinan === 1 && ns2[1].dari === 1 && ns2[1].ke === 2, 'pemindaian: kode nyata, urutan tanggal, belum tercatat, tanpa ganda');
+
+// API: pemilik meminta pemindaian
+[s] = await call('POST', '/api/kaitan/cari');
+ok(s === 401, 'penguji tidak bisa meminta pemindaian');
+let [, sc1] = await call('POST', '/api/kaitan/cari', {}, OWNER);
+let [, sc2] = await call('POST', '/api/kaitan/cari', {}, OWNER);
+ok(sc1.ok && sc2.already && sc1.runId === sc2.runId, 'permintaan pemindaian ganda memakai antrean yang sama');
+sq.prepare("UPDATE ai_usage SET calls = 0 WHERE day = ?").run(today);
+// Peristiwa paling awal dibuat 40 hari lalu: harus ikut dipindai dan ditawarkan sebagai penyebab.
+const tertua = sq.prepare("SELECT id FROM events WHERE status = 'aktif' ORDER BY id LIMIT 1").get().id;
+sq.prepare('UPDATE events SET tanggal = ? WHERE id = ?').run(dayStr(Date.now() - 40 * 86400e3), tertua);
+const scanQ = await tick();
+const scanRun = sq.prepare('SELECT * FROM runs WHERE id = ?').get(sc1.runId);
+ok(scanQ.runId === sc1.runId && scanRun.status === 'selesai' && /diminta pemilik/.test(scanRun.note), 'pemindaian diminta pemilik diproses jadwal 5 menit');
+ok(lastScanPrompt.includes(dayStr(Date.now() - 40 * 86400e3)) && /jangan diulang/.test(lastScanPrompt), 'pemindaian mencakup peristiwa 40 hari lalu dan daftar pasangan yang sudah tercatat');
+const scanLinks = sq.prepare("SELECT l.*, d.tanggal AS dt, k.tanggal AS kt FROM links l JOIN events d ON d.id = l.dari_id JOIN events k ON k.id = l.ke_id WHERE l.run_id = ?").all(sc1.runId);
+ok(scanLinks.length >= 1 && scanLinks.every((l) => l.status === 'usulan' && l.dt <= l.kt), `usulan dari pemindaian tersimpan (${scanLinks.length})`);
+const [, rvScan] = await call('GET', '/api/review', null, OWNER);
+const jauhP = rvScan.pending.find((p) => scanLinks.some((l) => l.id === p.id));
+ok(rvScan.lastScan && rvScan.lastScan.id === sc1.runId && rvScan.skorMaks === 4, 'Tinjau menampilkan hasil pemindaian terakhir dan skor maks 4');
+ok(jauhP && jauhP.alasan_prioritas.some((a) => /^Sebab dari \d+ hari sebelumnya$/.test(a)), 'usulan jarak jauh dari pemindaian masuk antrean tinjauan malam dengan alasan "Sebab dari N hari sebelumnya"');
+// Pembaruan harian menawarkan peristiwa lama (> 30 hari) sebagai pembanding.
+round = 9;
+lastLinkPrompt = '';
+[s, d] = await doRun(1);
+ok(d.ok && lastLinkPrompt.includes(dayStr(Date.now() - 40 * 86400e3)), 'pembaruan harian ikut menawarkan peristiwa 40 hari lalu sebagai penyebab');

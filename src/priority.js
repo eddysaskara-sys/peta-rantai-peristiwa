@@ -1,13 +1,14 @@
-import { KELOMPOK, INDIKATOR_INDONESIA, MAKS_TINJAU, HARI_KOLAM } from './constants.js';
+import { KELOMPOK, INDIKATOR_INDONESIA, MAKS_TINJAU, HARI_KOLAM, JARAK_JAUH_HARI, SKOR_MAKS } from './constants.js';
 import { kelompokOf, parseList, wibDate, wibDateDaysAgo, wibDayStartIso } from './util.js';
 import { computeSignals } from './market.js';
 
 const NAMA = new Map(KELOMPOK.map((k) => [k.id, k.nama]));
 
 /**
- * Skor prioritas satu usulan kaitan (0-3), 1 poin per kriteria:
+ * Skor prioritas satu usulan kaitan (0-4), 1 poin per kriteria:
  * - Dampak ke Indonesia: akibatnya peristiwa lokal, atau menyentuh rupiah/IHSG/BI Rate.
  * - Menyambung rantai lama: salah satu ujungnya sudah punya kaitan yang disetujui.
+ * - Sebab dari tanggal lebih awal: penyebab terjadi >= JARAK_JAUH_HARI sebelum akibat.
  * - Sektor sedang bergerak tidak biasa hari ini (harga atau lonjakan berita).
  * p memakai kolom hasil query review (dari_*, ke_* dengan sektor/indikator sudah berupa array).
  */
@@ -16,18 +17,28 @@ export function scoreProposal(p, { approvedIds, signals }) {
   const lama = approvedIds.has(p.dari_id) || approvedIds.has(p.ke_id);
   const kelompok = [...new Set([...kelompokOf(p.dari_sektor), ...kelompokOf(p.ke_sektor)])];
   const bergerak = signals.filter((s) => s.bergerak && kelompok.includes(s.id));
+  const jarak = hariAntara(p.dari_tanggal, p.ke_tanggal);
+  const jauh = jarak >= JARAK_JAUH_HARI;
   const alasan = [];
   if (indonesia) alasan.push('Berdampak ke Indonesia');
   if (lama) alasan.push('Menyambung rantai lama');
+  if (jauh) alasan.push(`Sebab dari ${jarak} hari sebelumnya`);
   for (const s of bergerak) alasan.push(`${s.nama}: ${s.label}`);
   return {
-    skor: Number(indonesia) + Number(lama) + Number(bergerak.length > 0),
+    skor: Number(indonesia) + Number(lama) + Number(jauh) + Number(bergerak.length > 0),
+    jarak,
     indonesia,
     lama,
     kelompok,
     kelompok_nama: kelompok.map((k) => NAMA.get(k)),
     alasan_prioritas: alasan,
   };
+}
+
+function hariAntara(a, b) {
+  const x = Date.parse(a || '');
+  const y = Date.parse(b || '');
+  return Number.isNaN(x) || Number.isNaN(y) ? 0 : Math.round((y - x) / 86400000);
 }
 
 /** Urutan: skor, lalu dampak ke Indonesia, lalu keyakinan AI, lalu yang terbaru. */
@@ -115,5 +126,5 @@ export async function reviewQueue(db, signals = null) {
   const sudah = await decidedToday(db);
   const slot = Math.max(0, MAKS_TINJAU - sudah);
   const tampil = ranked.slice(0, slot);
-  return { pending: tampil, menunggu: ranked.length - tampil.length, sudah, slot, maks: MAKS_TINJAU, signals: sig };
+  return { pending: tampil, menunggu: ranked.length - tampil.length, sudah, slot, maks: MAKS_TINJAU, skorMaks: SKOR_MAKS, signals: sig };
 }

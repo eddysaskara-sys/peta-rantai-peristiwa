@@ -182,8 +182,9 @@ async function renderTinjau() {
   view.innerHTML = `
     <section class="section">
       <div class="section-head"><h2>Tinjauan malam ini</h2><span class="muted small" id="quota">${quotaText(d)}</span></div>
-      <p class="lead">Maksimal ${d.maks} usulan per malam, diurutkan menurut prioritas: berdampak ke Indonesia, menyambung rantai lama, dan sektor yang sedang bergerak tidak biasa. Usulan lain tidak hilang; besok ikut bersaing lagi.</p>
+      <p class="lead">Maksimal ${d.maks} usulan per malam, diurutkan menurut prioritas: berdampak ke Indonesia, menyambung rantai lama, sebabnya dari tanggal yang lebih awal, dan sektor yang sedang bergerak tidak biasa. Usulan lain tidak hilang; besok ikut bersaing lagi.</p>
       <div id="proposals">${proposalsBody(d)}</div>
+      ${scanBoxHtml(d.lastScan)}
     </section>
 
     ${pulseHtml(d.signals, true)}
@@ -215,6 +216,18 @@ async function renderTinjau() {
 
   state.review = d;
   $('#run-btn').addEventListener('click', runNow);
+  $('#scan-btn').addEventListener('click', async (ev) => {
+    const b = ev.currentTarget;
+    b.disabled = true;
+    try {
+      await api('/api/kaitan/cari', { method: 'POST' });
+      b.textContent = 'Masuk antrean…';
+      $('#scan-msg').textContent = 'AI memindai semua peristiwa paling lambat 5 menit lagi. Usulan baru masuk ke daftar tinjauan di atas; buka lagi Tinjau untuk melihatnya.';
+    } catch (e) {
+      b.disabled = false;
+      toast(e.message);
+    }
+  });
   bindRiwayat(d);
   $('#cs-btn').addEventListener('click', async (ev) => {
     const b = ev.currentTarget;
@@ -250,7 +263,7 @@ function proposalHtml(p, riwayat = false) {
   const endBtn = (id, judul) => `<button class="linklike plainbtn" type="button" data-open="${id}">${esc(judul)}</button>`;
   const sisi = (txt) => (txt ? ' <span class="chip sisi" title="Media Indonesia dan internasional menyorot sudut berbeda">⚖️</span>' : '');
   return `<article class="proposal" id="p-${p.id}">
-    <div class="prio"><span class="prio-score" aria-label="Prioritas ${p.skor} dari 3">Prioritas ${p.skor}/3</span>
+    <div class="prio"><span class="prio-score" aria-label="Prioritas ${p.skor} dari ${SKOR_MAKS}">Prioritas ${p.skor}/${SKOR_MAKS}</span>
       ${(p.kelompok_nama || []).map((k) => `<span class="chip kel">${esc(k)}</span>`).join('')}</div>
     <div class="pair">
       <div class="end">${lvl(p.dari_tingkat)} <span class="muted small">${tgl(p.dari_tanggal)}</span>${sisi(p.dari_dua_sisi)}<br>${endBtn(p.dari_id, p.dari_judul)}</div>
@@ -280,6 +293,26 @@ function freshHtml(e) {
       <div style="margin-top:8px"><button class="btn ghost small-btn" type="button" data-archive="${e.id}">Arsipkan</button></div>
     </div>
   </div>`;
+}
+
+// ---------- Cari kaitan terbesar ----------
+const SKOR_MAKS = 4;
+function scanBoxHtml(run) {
+  let info = 'Belum pernah dijalankan.';
+  if (run) {
+    if (run.status === 'antre' || run.status === 'berjalan') info = 'Sedang diproses.';
+    else if (run.status === 'gagal') info = `Terakhir ${waktu(run.finished_at || run.started_at)}: gagal (${esc((run.note || '').split('\n').pop())}).`;
+    else info = `Terakhir ${waktu(run.finished_at)}: ${run.n_events} peristiwa dipindai, ${run.n_links} usulan kaitan baru.`;
+  }
+  const sejak = state.status.sejak ? ` sejak ${tgl(state.status.sejak)}` : '';
+  return `<div class="scan-box">
+      <div>
+        <p><b>Cari kaitan terbesar</b></p>
+        <p class="small muted">AI memeriksa semua peristiwa${sejak} dan mencari kaitan sebab-akibat terkuat yang belum tercatat, termasuk sebab dari tanggal jauh sebelumnya. Berjalan otomatis sekali sehari setelah pembaruan pertama hari itu.</p>
+        <p class="small" id="scan-msg">${info}</p>
+      </div>
+      <button class="btn ghost" id="scan-btn" type="button"${run && (run.status === 'antre' || run.status === 'berjalan') ? ' disabled' : ''}>Cari sekarang</button>
+    </div>`;
 }
 
 // ---------- Cek sumber berita (tanpa AI) ----------
@@ -1148,10 +1181,10 @@ function panduanPemilik() {
       </ul>
     </div>
     <div class="guide-card">
-      <h3>Rutinitas malam (± 5 menit)</h3>
+      <h3>Rutinitas malam (± 10 menit)</h3>
       <ol class="steps">
         <li>Buka ${goto('tinjau', '<b>Tinjau</b>')}. Angka di samping tulisan Tinjau adalah jumlah usulan yang menunggu.</li>
-        <li>Untuk setiap usulan kaitan, baca alasannya dan "mengapa diprioritaskan". Bila ragu, klik judul peristiwa untuk membaca beritanya. Lalu pilih <b>Setujui</b> (masuk ke Rantai) atau <b>Tolak</b>. Maksimal 5 keputusan per malam; usulan lain tidak hilang dan ikut bersaing besok.</li>
+        <li>Untuk setiap usulan kaitan, baca alasannya dan "mengapa diprioritaskan". Bila ragu, klik judul peristiwa untuk membaca beritanya. Lalu pilih <b>Setujui</b> (masuk ke Rantai) atau <b>Tolak</b>. Maksimal 15 keputusan per malam; usulan lain tidak hilang dan ikut bersaing besok. Usulan yang sebabnya dari tanggal jauh sebelumnya ditandai "Sebab dari N hari sebelumnya".</li>
         <li>Di bagian "Peristiwa dari pembaruan terakhir", klik <b>Arsipkan</b> untuk peristiwa yang tidak relevan agar tidak ikut dikaitkan.</li>
         <li>Buka ${goto('perkiraan', '<b>Perkiraan</b>')} dan pilih saringan <b>Perlu keputusan</b> (angka di samping tulisan Perkiraan). Baca saran AI dan buktinya, lalu putuskan.</li>
       </ol>
@@ -1180,8 +1213,9 @@ function panduanPemilik() {
       <dl class="legend-list">
         <dt>Ambil berita sekarang</dt><dd>Pembaruan di luar jadwal 17.30 WIB. Masuk antrean dan diproses paling lambat 5 menit kemudian.</dd>
         <dt>Cek sumber berita</dt><dd>Memeriksa setiap media dan topik: berapa judul yang didapat dan mana yang gagal. Tidak memakai kuota AI.</dd>
+        <dt>Cari kaitan terbesar</dt><dd>AI memindai semua peristiwa (bukan hanya yang baru) untuk mencari kaitan sebab-akibat terkuat yang belum tercatat, termasuk sebab dari beberapa minggu sebelumnya. Berjalan otomatis sekali sehari; tombol <b>Cari sekarang</b> untuk menjalankannya kapan saja. Hasilnya masuk daftar tinjauan.</dd>
         <dt>Ambil berita tanggal lampau</dt><dd>Untuk tanggal yang terlewat, mis. saat pembaruan gagal. Pilih tanggal mulai (paling jauh 60 hari); berita diambil dari arsip Google News dan diproses seperti pembaruan biasa.</dd>
-        <dt>Usulan kaitan lain</dt><dd>Usulan di luar antrean 5 per malam tampil sebagai daftar centang. Yang keyakinan AI-nya tinggi sudah tercentang; hapus centang yang tidak cocok, lalu klik <b>Setujui</b> sekali. Kaitan yang disetujui langsung masuk ke Rantai.</dd>
+        <dt>Usulan kaitan lain</dt><dd>Usulan di luar antrean malam tampil sebagai daftar centang. Yang keyakinan AI-nya tinggi sudah tercentang; hapus centang yang tidak cocok, lalu klik <b>Setujui</b> sekali. Kaitan yang disetujui langsung masuk ke Rantai.</dd>
       </dl>
     </div>
     <div class="guide-card">

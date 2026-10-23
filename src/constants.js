@@ -75,8 +75,16 @@ export const BERITA_MIN = 2; // lonjakan berita: minimal 2 peristiwa di kelompok
 export const BERITA_RASIO = 2; // dan porsinya >= 2x rata-rata 7 hari sebelumnya
 
 // ---------- Prioritas tinjauan ----------
-export const MAKS_TINJAU = 5; // usulan kaitan per malam
-export const HARI_KOLAM = 30; // usulan yang peristiwanya lebih tua dari ini sudah tergeser
+export const MAKS_TINJAU = 15; // usulan kaitan per malam (masukan pengguna 24 Okt: tidak perlu dibatasi 5)
+export const HARI_KOLAM = 60; // usulan yang peristiwanya lebih tua dari ini sudah tergeser
+export const JARAK_JAUH_HARI = 7; // kaitan dengan sebab >= 7 hari lebih awal mendapat 1 poin prioritas
+export const SKOR_MAKS = 4;
+
+// ---------- Cari kaitan terbesar (pemindaian semua peristiwa) ----------
+export const KAITAN_HARI = 60; // peristiwa yang ikut dipindai dan dibandingkan
+export const KAITAN_MAKS_PERISTIWA = 150; // batas peristiwa per pemindaian (ukuran prompt)
+export const KAITAN_MAKS = 20; // usulan baru per pemindaian
+export const LINK_LAMA_MAKS = 100; // peristiwa lama yang ditawarkan saat mengaitkan peristiwa baru
 // Indikator yang menandakan rantai sudah sampai ke Indonesia.
 export const INDIKATOR_INDONESIA = ['Rupiah', 'IHSG', 'BI Rate'];
 

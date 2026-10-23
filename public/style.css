@@ -410,3 +410,8 @@ ul.bukti.harga li { color: var(--text); }
   .rw-pair { grid-template-columns: 1fr; gap: 4px; }
   .rw-arrow { padding-top: 0; transform: rotate(90deg); width: 1em; }
 }
+
+/* ---------- Cari kaitan terbesar ---------- */
+.scan-box { display: flex; gap: 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: var(--radius-m); }
+.scan-box > div { flex: 1 1 360px; }
+.scan-box p + p { margin-top: 4px; }

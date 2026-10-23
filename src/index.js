@@ -1,4 +1,4 @@
-import { runPipeline, runHarian, enqueueRun, enqueueCekSumber, enqueueRiwayat, statusRiwayat, processQueue } from './pipeline.js';
+import { runPipeline, runHarian, enqueueRun, enqueueCekSumber, enqueueRiwayat, enqueueScan, statusRiwayat, processQueue } from './pipeline.js';
 import {
   SEKTOR,
   INDIKATOR,
@@ -291,7 +291,14 @@ async function route(request, env) {
     }
     const cekSumber = await db.prepare("SELECT * FROM runs WHERE trigger = 'cek-sumber' ORDER BY id DESC LIMIT 1").first();
     const lastRiwayat = await db.prepare("SELECT * FROM runs WHERE trigger = 'riwayat' AND status IN ('selesai','gagal') ORDER BY id DESC LIMIT 1").first();
-    return json({ ...q, lastRun, fresh, riwayat: await historyQueue(db), riwayatStatus: await statusRiwayat(db), lastRiwayat, cekSumber });
+    const lastScan = await db.prepare("SELECT * FROM runs WHERE trigger = 'kaitan' ORDER BY id DESC LIMIT 1").first();
+    return json({ ...q, lastRun, fresh, riwayat: await historyQueue(db), riwayatStatus: await statusRiwayat(db), lastRiwayat, cekSumber, lastScan });
+  }
+
+  if (path === '/api/kaitan/cari' && method === 'POST') {
+    const deny = requireOwner(request, env);
+    if (deny) return deny;
+    return json(await enqueueScan(env));
   }
 
   if (path === '/api/sumber/cek' && method === 'POST') {

@@ -20,7 +20,9 @@ RSS 12 feed ──► Workers AI ──────┴─► D1 ──► Tinjau
 
 Spesifikasi lengkap ada di `BRIEF.md`. Ringkasnya:
 - **Prioritas tinjauan** (1 poin per kriteria): berdampak ke Indonesia, menyambung rantai lama,
-  dan sektor yang sedang bergerak tidak biasa. Maksimal 5 keputusan per malam; sisanya bersaing lagi besok.
+  sebab dari tanggal lebih awal (≥ 7 hari), dan sektor yang sedang bergerak tidak biasa. Maksimal 15 keputusan per malam; sisanya bersaing lagi besok.
+- **Cari kaitan terbesar:** sekali sehari (dan atas permintaan pemilik) AI memindai semua peristiwa 60 hari terakhir untuk mencari
+  kaitan sebab-akibat terkuat yang belum tercatat, termasuk penyebab dari beberapa minggu sebelumnya; hasilnya masuk antrean tinjauan.
 - **6 kelompok sektor**. Pergerakan diukur hibrida: kurs USD/IDR (Frankfurter), emas (gold-api.com),
   Brent (API Ninjas), dan lonjakan berita untuk kelompok tanpa data harga. Gerak harga dibanding
   kebiasaan geraknya sendiri (30 hari); data harga tidak ditampilkan sebagai grafik.

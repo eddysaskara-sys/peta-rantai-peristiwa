@@ -162,19 +162,22 @@ export const LINK_SCHEMA = {
   required: ['kaitan'],
 };
 
-export function linkPrompt(newEvents, oldEvents) {
-  const system = `Kamu analis rantai sebab-akibat ekonomi. Usulkan KAITAN antar peristiwa, dari PENYEBAB ke AKIBAT.
-Aturan:
-- Setiap kaitan wajib melibatkan minimal satu peristiwa berkode B (baru).
-- Usulkan kaitan bila ada mekanisme ekonomi yang masuk akal. Jangan mengaitkan hanya karena topiknya mirip.
-- Jalur penularan yang umum antara peristiwa global dan Indonesia, sebagai panduan:
+const JALUR = `- Jalur penularan yang umum antara peristiwa global dan Indonesia, sebagai panduan:
   konflik di jalur pelayaran/produsen minyak -> harga minyak -> biaya BBM, subsidi energi, inflasi;
   kebijakan The Fed/dolar AS -> arus modal -> rupiah -> BI Rate -> kredit dan IHSG;
   cuaca ekstrem/gagal panen -> harga pangan global -> impor dan inflasi pangan;
   harga batubara/sawit/nikel -> ekspor dan neraca dagang -> rupiah dan APBN;
   tarif/sanksi dagang -> rantai pasok -> industri dan ekspor;
-  kebijakan BI/pemerintah -> likuiditas perbankan, daya beli, sektor terkait.
+  kebijakan BI/pemerintah -> likuiditas perbankan, daya beli, sektor terkait.`;
+
+export function linkPrompt(newEvents, oldEvents) {
+  const system = `Kamu analis rantai sebab-akibat ekonomi. Usulkan KAITAN antar peristiwa, dari PENYEBAB ke AKIBAT.
+Aturan:
+- Setiap kaitan wajib melibatkan minimal satu peristiwa berkode B (baru).
+- Usulkan kaitan bila ada mekanisme ekonomi yang masuk akal. Jangan mengaitkan hanya karena topiknya mirip.
+${JALUR}
 - Kaitan antara dua peristiwa baru (B ke B) juga boleh.
+- Penyebab bisa terjadi jauh sebelumnya (beberapa hari sampai beberapa minggu). Periksa juga peristiwa lama (L) sebagai penyebab peristiwa baru, bukan hanya yang paling baru.
 - Penyebab tidak boleh terjadi setelah akibat.
 - "jenis": salah satu dari ${JENIS.join(', ')}.
 - "alasan": 1 kalimat yang menjelaskan mekanismenya, dalam Bahasa Indonesia.
@@ -245,4 +248,29 @@ Berita dari ${b.dasar} sampai ${b.sampai || 'hari ini'}:
 ${berita}`;
   });
   return { system, user: `Hari ini: ${today}\n\n${blocks.join('\n\n---\n\n')}` };
+}
+
+// ---------- Cari kaitan terbesar: pindai semua peristiwa ----------
+
+export function scanPrompt(events, existing, maks) {
+  const system = `Kamu analis rantai sebab-akibat ekonomi. Dari SEMUA peristiwa bernomor di bawah (rentang beberapa minggu), cari KAITAN SEBAB-AKIBAT TERKUAT yang belum tercatat.
+Aturan:
+- Utamakan kaitan yang kuat dan penting bagi ekonomi dan pasar Indonesia. Kaitan global ke global boleh bila mekanismenya jelas.
+- Penyebab boleh terjadi jauh sebelumnya (beberapa hari sampai beberapa minggu). Cari secara khusus peristiwa lama yang menjadi penyebab peristiwa yang lebih baru.
+- Penyebab tidak boleh terjadi setelah akibat.
+- Usulkan kaitan hanya bila ada mekanisme ekonomi yang masuk akal. Jangan mengaitkan hanya karena topiknya mirip.
+- Jangan mengaitkan dua peristiwa yang sebenarnya kejadian yang sama.
+- Jangan mengulang pasangan yang sudah tercatat (daftar di bawah), dalam arah mana pun.
+${JALUR}
+- "jenis": salah satu dari ${JENIS.join(', ')}.
+- "alasan": 1 kalimat yang menjelaskan mekanismenya, dalam Bahasa Indonesia.
+- "keyakinan": angka 0 sampai 1, jujur.
+- Maksimal ${maks} kaitan, diurutkan dari yang paling kuat. Bila tidak ada yang masuk akal, kembalikan daftar kosong.
+Jawab HANYA dengan JSON tanpa teks lain, memakai kode peristiwa (mis. "E3", "E41"), dengan bentuk:
+{"kaitan":[{"dari":"E3","ke":"E41","jenis":"menyebabkan","alasan":"","keyakinan":0.6}]}`;
+  const lines = events.map((e, i) => `E${i + 1} [${e.tanggal} | ${e.tingkat} | ${(e.sektor || []).join(', ')}] ${e.judul}`);
+  const user =
+    `Peristiwa (urut tanggal):\n${lines.join('\n')}\n\n` +
+    (existing.length ? `Pasangan yang sudah tercatat (jangan diulang): ${existing.join(', ')}` : 'Belum ada pasangan yang tercatat.');
+  return { system, user };
 }
