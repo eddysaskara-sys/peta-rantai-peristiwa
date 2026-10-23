@@ -1,4 +1,4 @@
-import { runPipeline, enqueueRun, enqueueCekSumber, enqueueRiwayat, statusRiwayat, processQueue } from './pipeline.js';
+import { runPipeline, runHarian, enqueueRun, enqueueCekSumber, enqueueRiwayat, statusRiwayat, processQueue } from './pipeline.js';
 import {
   SEKTOR,
   INDIKATOR,
@@ -52,7 +52,7 @@ export default {
   // - 17.30 WIB: pembaruan otomatis harian
   // - tiap 5 menit: jalankan permintaan "Ambil berita sekarang" yang sedang antre
   async scheduled(event, env, ctx) {
-    if (event.cron === DAILY_CRON) ctx.waitUntil(runPipeline(env, { trigger: 'jadwal', days: 1 }));
+    if (event.cron === DAILY_CRON) ctx.waitUntil(runHarian(env));
     else ctx.waitUntil(processQueue(env));
   },
 };

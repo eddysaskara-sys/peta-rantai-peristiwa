@@ -141,11 +141,32 @@ export async function collectMarket(env) {
  * Harga terakhir pada atau sebelum suatu tanggal, dan harga terbaru. Untuk bukti perkiraan.
  * Mengembalikan null bila salah satunya tidak ada atau keduanya hari yang sama.
  */
-export async function priceChange(db, kode, sejak) {
+export async function priceChange(db, kode, sejak, sampai = null) {
+  // `sampai` = tanggal cek perkiraan bila sudah lewat; tanpa itu dipakai harga terbaru.
   const a = await db.prepare('SELECT day, nilai FROM market_prices WHERE kode = ? AND day <= ? ORDER BY day DESC LIMIT 1').bind(kode, sejak).first();
-  const b = await db.prepare('SELECT day, nilai FROM market_prices WHERE kode = ? ORDER BY day DESC LIMIT 1').bind(kode).first();
+  const b = await db
+    .prepare('SELECT day, nilai FROM market_prices WHERE kode = ? AND day <= ? ORDER BY day DESC LIMIT 1')
+    .bind(kode, sampai || '9999-12-31')
+    .first();
   if (!a || !b || b.day <= a.day) return null;
-  return { kode, nama: SERI_HARGA[kode].nama, dari: a, ke: b, perubahan: (b.nilai / a.nilai - 1) * 100 };
+  const rentang = (
+    await db
+      .prepare('SELECT day, nilai FROM market_prices WHERE kode = ? AND day > ? AND day <= ? ORDER BY day')
+      .bind(kode, a.day, b.day)
+      .all()
+  ).results;
+  const pct = (x) => (x.nilai / a.nilai - 1) * 100;
+  const tertinggi = rentang.reduce((m, x) => (x.nilai > m.nilai ? x : m), b);
+  const terendah = rentang.reduce((m, x) => (x.nilai < m.nilai ? x : m), b);
+  return {
+    kode,
+    nama: SERI_HARGA[kode].nama,
+    dari: a,
+    ke: b,
+    perubahan: pct(b),
+    tertinggi: { ...tertinggi, perubahan: pct(tertinggi) },
+    terendah: { ...terendah, perubahan: pct(terendah) },
+  };
 }
 
 // ---------- Perhitungan sinyal (fungsi murni, mudah diuji) ----------

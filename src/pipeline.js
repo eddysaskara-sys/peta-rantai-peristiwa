@@ -28,7 +28,7 @@ export async function runPipeline(env, { trigger = 'manual', days = 1, runId: qu
     .prepare("SELECT id FROM runs WHERE status = 'berjalan' AND started_at > ? LIMIT 1")
     .bind(new Date(Date.now() - 10 * 60000).toISOString())
     .first();
-  if (busy) return { ok: false, message: 'Pembaruan lain sedang berjalan. Tunggu beberapa menit.' };
+  if (busy) return { ok: false, sibuk: true, message: 'Pembaruan lain sedang berjalan. Tunggu beberapa menit.' };
 
   let runId = queuedId;
   if (runId) {
@@ -188,6 +188,27 @@ export async function enqueueRun(env, days) {
   return { ok: true, runId: row.id, already: false };
 }
 
+/**
+ * Pembaruan harian 17.30 WIB. Bila saat itu ada pekerjaan lain yang sedang berjalan (mis. giliran
+ * riwayat), pembaruan dimasukkan antrean dan dijalankan jadwal 5 menit berikutnya, bukan dilewati.
+ * (23 Okt 2026: pembaruan harian sempat terlewat karena giliran riwayat mulai pada detik yang sama.)
+ */
+export async function runHarian(env) {
+  const r = await runPipeline(env, { trigger: 'jadwal', days: 1 });
+  if (r.ok || !r.sibuk) return r;
+  const row = await env.DB
+    .prepare("INSERT INTO runs (started_at, trigger, status, note) VALUES (?, 'jadwal', 'antre', 'days=1') RETURNING id")
+    .bind(nowIso())
+    .first();
+  return { ok: true, runId: row.id, antre: true };
+}
+
+/** Riwayat tidak dimulai sekitar jadwal harian (17.10–17.40 WIB), agar pembaruan harian tidak terganggu. */
+export function dekatJadwalHarian(d = new Date()) {
+  const m = d.getUTCHours() * 60 + d.getUTCMinutes();
+  return m >= 10 * 60 + 10 && m < 10 * 60 + 40;
+}
+
 /** Pemeriksaan sumber berita tanpa AI: berapa judul yang didapat dari setiap sumber. */
 export async function enqueueCekSumber(env) {
   const db = env.DB;
@@ -315,13 +336,13 @@ export async function processQueue(env) {
         .prepare("SELECT finished_at FROM runs WHERE trigger = 'riwayat' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1")
         .first();
       const jedaCukup = !terakhir || Date.parse(terakhir.finished_at) <= Date.now() - RIWAYAT_JEDA_MENIT * 60000;
-      if (jedaCukup && (await aiCallsToday(db)) <= AI_DAILY_LIMIT - AI_CADANGAN) {
+      if (jedaCukup && !dekatJadwalHarian() && (await aiCallsToday(db)) <= AI_DAILY_LIMIT - AI_CADANGAN) {
         return runPipeline(env, { trigger: 'riwayat', runId: q.id, jendela: parseJendela(q.note) });
       }
       // Menunggu jeda antar giliran, atau kuota AI hari ini disisakan untuk pembaruan harian.
     } else if (q) {
       const days = Number(/days=(\d+)/.exec(q.note || '')?.[1]) || 1;
-      return runPipeline(env, { trigger: 'manual', days, runId: q.id });
+      return runPipeline(env, { trigger: q.trigger, days, runId: q.id });
     }
   }
   const riwayatJalan = await db.prepare("SELECT id FROM runs WHERE trigger = 'riwayat' AND status IN ('antre','berjalan') LIMIT 1").first();

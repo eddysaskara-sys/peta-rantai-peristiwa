@@ -133,11 +133,11 @@ export async function collectHeadlines(opts = {}) {
 }
 
 /** Alamat pencarian Google News RSS untuk satu topik. */
-export function gnewsUrl(topik, { days = 1, jendela = null, setelah = null } = {}) {
+export function gnewsUrl(topik, { days = 1, jendela = null, setelah = null, sebelum = null } = {}) {
   const ed = GNEWS_EDISI[topik.edisi] || GNEWS_EDISI.id;
   let q = topik.q;
   if (jendela) q += ` after:${jendela.mulai} before:${addDays(jendela.sampai, 1)}`;
-  else if (setelah) q += ` after:${setelah}`;
+  else if (setelah) q += ` after:${setelah}` + (sebelum ? ` before:${sebelum}` : '');
   else q += ` when:${days + 1}d`;
   return `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=${ed.hl}&gl=${ed.gl}&ceid=${ed.ceid}`;
 }

@@ -222,6 +222,7 @@ Aturan:
 - "terjadi": hanya bila ada judul berita atau data harga yang JELAS menunjukkan hasil yang diperkirakan sudah terjadi: arahnya sama, dan besarannya kira-kira sesuai bila perkiraan menyebut angka.
 - "tidak": hanya bila tanggal cek SUDAH LEWAT dan bukti menunjukkan kebalikannya atau jelas tidak terjadi.
 - "belum": bila bukti belum cukup, hanya tidak langsung, atau tanggal cek belum lewat dan hasilnya belum terlihat. Jika ragu, pilih "belum".
+- Bila tanggal cek sudah lewat, nilai keadaan PADA tanggal cek. Perubahan sesudah tanggal cek tidak dihitung. Data harga sudah dibatasi sampai tanggal cek; "di antaranya" menunjukkan titik tertinggi/terendah dalam rentang itu, berguna untuk perkiraan "dalam N hari".
 - Perkiraan bersyarat ("jika ..."): periksa juga syaratnya. Bila syarat tidak terpenuhi, pilih "belum" kecuali tanggal cek sudah lewat.
 - Rencana, wacana, atau prediksi pihak lain BUKAN bukti bahwa sesuatu sudah terjadi.
 - Jangan menambah fakta di luar bukti yang diberikan.
@@ -238,9 +239,9 @@ Jawab HANYA dengan JSON tanpa teks lain, satu entri per perkiraan, dengan bentuk
     const harga = b.harga.length ? b.harga.map((h) => `- ${h}`).join('\n') : '(tidak ada data harga terkait)';
     return `Perkiraan P${f.id} (dasar: peristiwa ${b.dasar} "${f.event_judul}"; tanggal cek ${f.tanggal_cek}${f.tanggal_cek <= today ? ', SUDAH LEWAT' : ', belum lewat'}):
 "${f.teks}"
-Data harga sejak tanggal dasar:
+Data harga dari tanggal dasar sampai ${f.tanggal_cek <= today ? 'tanggal cek' : 'hari ini'}:
 ${harga}
-Berita sesudah tanggal dasar:
+Berita dari ${b.dasar} sampai ${b.sampai || 'hari ini'}:
 ${berita}`;
   });
   return { system, user: `Hari ini: ${today}\n\n${blocks.join('\n\n---\n\n')}` };

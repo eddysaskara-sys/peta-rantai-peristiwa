@@ -6,8 +6,11 @@ import { readFileSync } from 'node:fs';
 const ROOT = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
 const worker = (await import(ROOT + '/src/index.js')).default;
 const { cleanTitle, parseGnews, selectHeadlines, originOf } = await import(ROOT + '/src/sources.js');
+const { GNEWS_TOPIK } = await import(ROOT + '/src/constants.js');
 const { kelompokPerkiraan, normalizeChecks, kataKunci } = await import(ROOT + '/src/forecast.js');
-const { bagiJendela, pilihContohPerkiraan } = await import(ROOT + '/src/pipeline.js');
+const { bagiJendela, pilihContohPerkiraan, dekatJadwalHarian } = await import(ROOT + '/src/pipeline.js');
+const { priceChange } = await import(ROOT + '/src/market.js');
+const { kumpulkanBukti, hargaKalimat } = await import(ROOT + '/src/forecast.js');
 const { priceSignal, newsSignals } = await import(ROOT + '/src/market.js');
 const { rankProposals } = await import(ROOT + '/src/priority.js');
 
@@ -91,7 +94,7 @@ const gnewsMock = (u) => {
   const q = decodeURIComponent(u.split('q=')[1].split('&')[0]);
   const en = u.includes('hl=en-US');
   const w = /after:(\d{4}-\d{2}-\d{2}) before:(\d{4}-\d{2}-\d{2})/.exec(q);
-  if (w) {
+  if (w && GNEWS_TOPIK.some((t) => q.startsWith(t.q))) {
     // Jendela riwayat: 2 berita per topik, bertanggal di dalam jendela.
     const t = Date.parse(w[1] + 'T05:00:00Z') + 86400e3;
     const topik = q.slice(0, 12);
@@ -516,3 +519,34 @@ const held = await tick();
 ok(rw.jendela === 2 && !held.runId && sq.prepare("SELECT COUNT(*) AS n FROM runs WHERE trigger = 'riwayat' AND status = 'antre'").get().n === 2, 'riwayat ditunda bila kuota AI tinggal cadangan untuk pembaruan harian');
 [s, d] = await call('GET', '/api/chain/' + evBBM.id);
 ok(Array.isArray(d.tercatat) && d.tercatat.some((t) => t.teks === 'Harga BBM nonsubsidi naik'), 'rantai menyertakan perkiraan yang sudah tercatat');
+
+// ======================= Perbaikan sesudah uji produksi 23 Okt (18.20 WIB) =======================
+// Pembaruan harian tidak boleh hilang bila bertabrakan dengan pekerjaan lain.
+sq.prepare("INSERT INTO runs (started_at, trigger, status, note) VALUES (?, 'riwayat', 'berjalan', 'riwayat=2026-01-01..2026-01-02')").run(new Date().toISOString());
+let ph; await worker.scheduled({ cron: '30 10 * * *' }, env, { waitUntil(x) { ph = x; } }); const harian = await ph;
+const qh = sq.prepare('SELECT * FROM runs WHERE id = ?').get(harian.runId);
+ok(harian.antre === true && qh.trigger === 'jadwal' && qh.status === 'antre', 'pembaruan harian yang bertabrakan masuk antrean, tidak dilewati');
+sq.prepare("UPDATE runs SET status = 'selesai', finished_at = ? WHERE trigger = 'riwayat' AND status = 'berjalan'").run(new Date(Date.now() - 20 * 60e3).toISOString());
+const jalanHarian = await tick();
+ok(jalanHarian.runId === harian.runId && sq.prepare('SELECT status FROM runs WHERE id = ?').get(harian.runId).status === 'selesai', 'antrean pembaruan harian dijalankan jadwal 5 menit berikutnya, mendahului riwayat');
+ok(dekatJadwalHarian(new Date('2026-10-23T10:30:00Z')) && dekatJadwalHarian(new Date('2026-10-23T10:15:00Z')) && !dekatJadwalHarian(new Date('2026-10-23T10:45:00Z')) && !dekatJadwalHarian(new Date('2026-10-23T09:30:00Z')), 'riwayat tidak dimulai sekitar 17.30 WIB');
+
+// Bukti harga dinilai sampai tanggal cek, dengan titik tertinggi/terendah.
+const fxDays = sq.prepare("SELECT day, nilai FROM market_prices WHERE kode = 'USDIDR' ORDER BY day").all();
+const d0 = fxDays[fxDays.length - 12].day, d1 = fxDays[fxDays.length - 6].day;
+const pc = await priceChange(DB, 'USDIDR', d0, d1);
+ok(pc && pc.ke.day === d1 && pc.ke.day < fxDays.at(-1).day, 'perubahan kurs dihitung sampai tanggal cek, bukan sampai hari ini');
+ok(pc.tertinggi.nilai >= pc.ke.nilai && pc.terendah.nilai <= pc.ke.nilai, 'titik tertinggi dan terendah dalam rentang tersedia');
+const kal = hargaKalimat({ kode: 'USDIDR', nama: 'USD/IDR', dari: { day: '2026-10-02', nilai: 17950 }, ke: { day: '2026-10-12', nilai: 18010 }, perubahan: 0.33, tertinggi: { day: '2026-10-09', nilai: 18150, perubahan: 1.11 }, terendah: { day: '2026-10-12', nilai: 18010, perubahan: 0.33 } });
+ok(/di antaranya tertinggi 18\.150 \(2026-10-09, \+1,11%\)/.test(kal) && !/terendah/.test(kal), 'kalimat harga menyebut titik tertinggi bila relevan');
+
+// Bukti berita dibatasi sampai 3 hari sesudah tanggal cek bila tanggal cek sudah lewat.
+const evOld = sq.prepare("SELECT id FROM events ORDER BY id LIMIT 1").get().id;
+sq.prepare('UPDATE events SET tanggal = ? WHERE id = ?').run(dayStr(Date.now() - 30 * 86400e3), evOld);
+for (const [t, ago] of [['Harga BBM nonsubsidi naik tajam di SPBU', 25], ['Harga BBM nonsubsidi turun lagi sebulan kemudian', 2]]) {
+  sq.prepare("INSERT INTO articles (url, title, source, origin, published_at, fetched_at) VALUES (?, ?, 'contoh.id', 'lokal', ?, ?)").run('https://contoh.id/w/' + ago, t, new Date(Date.now() - ago * 86400e3).toISOString(), new Date().toISOString());
+}
+const bk = await kumpulkanBukti(DB, { id: 999, event_id: evOld, event_tanggal: dayStr(Date.now() - 30 * 86400e3), teks: 'Harga BBM nonsubsidi naik dalam 14 hari', tanggal_cek: dayStr(Date.now() - 16 * 86400e3) }, { cariOnline: false });
+ok(bk.sampai && bk.berita.some((b) => /naik tajam/.test(b.judul)) && !bk.berita.some((b) => /turun lagi/.test(b.judul)), 'berita sesudah tanggal cek (+3 hari) tidak dipakai sebagai bukti');
+const { gnewsUrl } = await import(ROOT + '/src/sources.js');
+ok(decodeURIComponent(gnewsUrl({ q: 'bbm', edisi: 'id' }, { setelah: '2026-10-02', sebelum: '2026-10-20' })).includes('after:2026-10-02 before:2026-10-20'), 'pencarian bukti daring memakai batas after:/before:');

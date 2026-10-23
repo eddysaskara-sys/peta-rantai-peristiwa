@@ -1,5 +1,5 @@
 import { KELOMPOK, AI_DAILY_LIMIT, AI_CADANGAN, AI_CADANGAN_DIMINTA, CEK_PER_GILIRAN, CEK_ULANG_HARI } from './constants.js';
-import { kelompokOf, parseList, wibDate, nowIso } from './util.js';
+import { kelompokOf, parseList, wibDate, nowIso, addDays } from './util.js';
 import { priceChange } from './market.js';
 import { fetchGnews, titleKey } from './sources.js';
 import { runJson, checkPrompt, CEK_SCHEMA, QuotaError } from './ai.js';
@@ -118,8 +118,13 @@ const pctStr = (x, d = 1) => (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).to
 const angka = (x) => (x >= 1000 ? Math.round(x).toLocaleString('id-ID') : x.toFixed(2).replace('.', ','));
 
 export function hargaKalimat(c) {
+  const d = c.kode === 'USDIDR' ? 2 : 1;
   const arah = c.kode === 'USDIDR' ? (c.perubahan > 0 ? ' (rupiah melemah)' : c.perubahan < 0 ? ' (rupiah menguat)' : '') : '';
-  return `${c.nama} ${angka(c.dari.nilai)} (${c.dari.day}) → ${angka(c.ke.nilai)} (${c.ke.day}): ${pctStr(c.perubahan, c.kode === 'USDIDR' ? 2 : 1)}${arah}`;
+  let s = `${c.nama} ${angka(c.dari.nilai)} (${c.dari.day}) → ${angka(c.ke.nilai)} (${c.ke.day}): ${pctStr(c.perubahan, d)}${arah}`;
+  const ex = [];
+  if (c.tertinggi && c.tertinggi.day !== c.ke.day && c.tertinggi.perubahan > Math.max(c.perubahan, 0)) ex.push(`tertinggi ${angka(c.tertinggi.nilai)} (${c.tertinggi.day}, ${pctStr(c.tertinggi.perubahan, d)})`);
+  if (c.terendah && c.terendah.day !== c.ke.day && c.terendah.perubahan < Math.min(c.perubahan, 0)) ex.push(`terendah ${angka(c.terendah.nilai)} (${c.terendah.day}, ${pctStr(c.terendah.perubahan, d)})`);
+  return ex.length ? `${s}; di antaranya ${ex.join(', ')}` : s;
 }
 
 /**
@@ -128,8 +133,12 @@ export function hargaKalimat(c) {
  * 2. pencarian Google News sesudah tanggal dasar (bila diizinkan);
  * 3. perubahan harga pasar terkait sejak tanggal dasar.
  */
-export async function kumpulkanBukti(db, f, { cariOnline = true } = {}) {
+export async function kumpulkanBukti(db, f, { cariOnline = true, today = wibDate() } = {}) {
   const dasar = f.event_tanggal || String(f.created_at || '').slice(0, 10);
+  // Bila tanggal cek sudah lewat, yang dinilai keadaan pada tanggal itu: berita dibatasi sampai
+  // 3 hari sesudahnya (laporan sering terlambat sehari-dua), harga sampai tanggal cek.
+  const lewat = f.tanggal_cek <= today;
+  const sampai = lewat ? addDays(f.tanggal_cek, 3) : null;
   const kk = kataKunci(f.teks);
   const pola = [...new Set(kk.flatMap((k) => [k, ...(INGGRIS[k] || [])]))].slice(0, 10);
   const kandidat = [];
@@ -137,12 +146,12 @@ export async function kumpulkanBukti(db, f, { cariOnline = true } = {}) {
     const rows = await db
       .prepare(
         `SELECT title, url, source, origin, published_at FROM articles
-         WHERE COALESCE(published_at, fetched_at) >= ?
+         WHERE COALESCE(published_at, fetched_at) >= ? AND COALESCE(published_at, fetched_at) < ?
            AND id NOT IN (SELECT article_id FROM event_articles WHERE event_id = ?)
            AND (${pola.map(() => 'title LIKE ?').join(' OR ')})
          ORDER BY published_at DESC LIMIT 400`
       )
-      .bind(`${dasar}T00:00:00`, f.event_id, ...pola.map((p) => `%${p}%`))
+      .bind(`${dasar}T00:00:00`, sampai ? `${addDays(sampai, 1)}T00:00:00` : '9999', f.event_id, ...pola.map((p) => `%${p}%`))
       .all();
     kandidat.push(...rows.results);
   }
@@ -150,7 +159,7 @@ export async function kumpulkanBukti(db, f, { cariOnline = true } = {}) {
   if (cariOnline && kk.length) {
     try {
       const q = kk.slice(0, 3).map((k) => (k.includes(' ') ? `"${k}"` : k)).join(' OR ');
-      const items = await fetchGnews({ q, edisi: 'id' }, { setelah: dasar, limit: 30 });
+      const items = await fetchGnews({ q, edisi: 'id' }, { setelah: dasar, sebelum: sampai ? addDays(sampai, 1) : null, limit: 30 });
       online = items.length;
       kandidat.push(...items.map((a) => ({ title: a.title, url: a.url, source: a.source, origin: a.origin, published_at: a.published_at })));
     } catch {
@@ -161,7 +170,8 @@ export async function kumpulkanBukti(db, f, { cariOnline = true } = {}) {
   const seen = new Set();
   const berita = kandidat
     .filter((a) => {
-      if (a.published_at && a.published_at.slice(0, 10) < dasar) return false;
+      const tgl = String(a.published_at || '').slice(0, 10);
+      if (tgl && (tgl < dasar || (sampai && tgl > sampai))) return false;
       const k = titleKey(a.title);
       if (seen.has(k)) return false;
       seen.add(k);
@@ -178,10 +188,10 @@ export async function kumpulkanBukti(db, f, { cariOnline = true } = {}) {
     .map((a) => ({ judul: a.title, url: a.url, sumber: a.source, asal: a.origin, tanggal: String(a.published_at || '').slice(0, 10) }));
   const harga = [];
   for (const kode of seriTerkait(f.teks)) {
-    const c = await priceChange(db, kode, dasar);
+    const c = await priceChange(db, kode, dasar, lewat ? f.tanggal_cek : null);
     if (c) harga.push(hargaKalimat(c));
   }
-  return { dasar, berita, harga, online };
+  return { dasar, sampai, berita, harga, online };
 }
 
 // ---------- Saran AI ----------
@@ -278,7 +288,7 @@ export async function checkForecasts(env, { maks = CEK_PER_GILIRAN, riwayatSeles
   await db.batch(
     batch.map((f) => {
       const h = hasil.get(f.id);
-      const bukti = JSON.stringify({ berita: f.bukti.berita, harga: f.bukti.harga, dipakai: h ? h.dipakai : [], dasar: f.bukti.dasar });
+      const bukti = JSON.stringify({ berita: f.bukti.berita, harga: f.bukti.harga, dipakai: h ? h.dipakai : [], dasar: f.bukti.dasar, sampai: f.bukti.sampai });
       return db
         .prepare(
           'UPDATE forecasts SET saran_status = ?, saran_alasan = ?, saran_keyakinan = ?, saran_bukti = ?, saran_at = ?, cek_diminta = NULL WHERE id = ?'
