@@ -660,3 +660,19 @@ ok(s === 200 && d.down[0].length === banyak.length - 1, `rantai dengan > 100 per
 const hub = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, tanggal: '2026-10-0' + (i + 1) }));
 const nsHub = normalizeScan({ kaitan: [1, 2, 3, 4, 5].map((i) => ({ dari: 'E' + i, ke: 'E6', jenis: 'menyebabkan', alasan: 'x', keyakinan: 0.7 })) }, hub);
 ok(nsHub.length === 3 && nsHub.map((l) => l.dari).join() === '100,101,102', 'pemindaian: maks. 3 usulan baru per peristiwa akibat, urutan AI dipertahankan');
+
+// Hipotesis AI yang dicatat belakangan: tanggal cek dihitung dari tanggal peristiwa, bukan tanggal dicatat.
+const tglLama = dayStr(Date.now() - 22 * 86400e3);
+const evLama = sq.prepare("INSERT INTO events (run_id, tanggal, judul, ringkasan, tingkat, sektor, indikator, dua_sisi, dampak, created_at) VALUES (1, ?, 'Harga beras impor naik', '', 'lokal', '[\"Pangan\"]', '[]', '', ?, ?) RETURNING id")
+  .get(tglLama, JSON.stringify([{ teks: 'Harga beras naik 4% dalam 14 hari', hari: 14 }, { teks: 'Impor beras bertambah dalam 60 hari', hari: 60 }]), new Date().toISOString()).id;
+let [, hipLama] = await call('POST', '/api/forecasts', { event_id: evLama, teks: 'Harga beras naik 4% dalam 14 hari', hari: 14 }, OWNER);
+ok(hipLama.tanggal_cek === dayStr(Date.now() - 8 * 86400e3) && hipLama.lewat === true, `hipotesis lama: tanggal cek = tanggal peristiwa + 14 hari (${hipLama.tanggal_cek})`);
+let [, hipBaru] = await call('POST', '/api/forecasts', { event_id: evLama, teks: 'Impor beras bertambah dalam 60 hari', hari: 60, tanggal_cek: '2099-01-01' }, OWNER);
+ok(hipBaru.tanggal_cek === dayStr(Date.now() + 38 * 86400e3) && hipBaru.lewat === false, 'hipotesis AI: tanggal cek dari klien diabaikan, tetap dari tanggal peristiwa');
+let [, sendiri] = await call('POST', '/api/forecasts', { event_id: evLama, teks: 'Perkiraan saya sendiri', hari: 30 }, OWNER);
+ok(sendiri.tanggal_cek === dayStr(Date.now() + 30 * 86400e3), 'perkiraan tulisan sendiri tetap dihitung dari hari ini');
+const lewatDicek = await (async () => { const { perluDicek } = await import('../src/forecast.js'); return perluDicek(env.DB, { maks: 50 }); })();
+ok(lewatDicek.some((f) => f.id === hipLama.id), 'hipotesis lama yang sudah lewat langsung masuk antrean cek AI');
+[s, d] = await call('GET', '/api/chain/' + evLama);
+const tc = d.tercatat.find((t) => t.id === hipLama.id);
+ok(s === 200 && d.today && tc && tc.tanggal_cek && tc.status === 'menunggu' && 'saran_status' in tc, 'rantai mengirim status dan tanggal cek perkiraan tercatat');

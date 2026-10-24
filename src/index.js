@@ -77,6 +77,11 @@ async function body(request) {
   }
 }
 
+// Hipotesis AI milik peristiwa yang teksnya sama persis dengan perkiraan yang dicatat.
+export function hipotesisDari(ev, teks) {
+  return parseList(ev.dampak).find((h) => h && String(h.teks || '').trim() === teks && Number(h.hari) > 0) || null;
+}
+
 function eventOut(r) {
   const sektor = parseList(r.sektor);
   return {
@@ -256,8 +261,12 @@ async function route(request, env) {
     const decorate = (levels) =>
       levels.map((lvl) => lvl.map((n) => ({ event: evMap.get(n.eventId), link: n.link, via: n.via })));
     const nodeIds = [id, ...ids];
-    const tercatat = await allInChunks(db, (ph) => `SELECT event_id, teks FROM forecasts WHERE event_id IN (${ph})`, nodeIds);
-    return json({ focus: eventOut(focus), up: decorate(up), down: decorate(down), tercatat });
+    const tercatat = await allInChunks(
+      db,
+      (ph) => `SELECT id, event_id, teks, tanggal_cek, status, saran_status, asal FROM forecasts WHERE event_id IN (${ph}) ORDER BY tanggal_cek, id`,
+      nodeIds
+    );
+    return json({ today: wibDate(), focus: eventOut(focus), up: decorate(up), down: decorate(down), tercatat });
   }
 
   // ---------- Tinjauan pemilik ----------
@@ -457,13 +466,19 @@ async function route(request, env) {
     // Perkiraan yang sama dari peristiwa yang sama tidak dicatat dua kali.
     const ada = await db.prepare('SELECT id FROM forecasts WHERE event_id = ? AND teks = ?').bind(eventId, teks).first();
     if (ada) return json({ ok: true, sudah: true, id: ada.id });
+    const ev = await db.prepare('SELECT tanggal, dampak FROM events WHERE id = ?').bind(eventId).first();
+    if (!ev) return json({ error: 'Peristiwa tidak ditemukan.' }, 404);
+    // Hipotesis AI dihitung dari tanggal peristiwanya ("dalam N hari" sejak peristiwa),
+    // bukan dari tanggal dicatat. Hipotesis lama yang baru dicatat bisa langsung jatuh tempo.
+    const hip = hipotesisDari(ev, teks);
     let tanggal = String(b.tanggal_cek || '');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) tanggal = addDays(wibDate(), Number(b.hari) || 30);
+    if (hip) tanggal = addDays(ev.tanggal, hip.hari);
+    else if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal)) tanggal = addDays(wibDate(), Number(b.hari) || 30);
     const row = await db
       .prepare("INSERT INTO forecasts (event_id, teks, tanggal_cek, created_at, asal) VALUES (?, ?, ?, ?, 'manual') RETURNING id")
       .bind(eventId, teks, tanggal, nowIso())
       .first();
-    return json({ ok: true, id: row.id });
+    return json({ ok: true, id: row.id, tanggal_cek: tanggal, lewat: tanggal <= wibDate() });
   }
 
   m = path.match(/^\/api\/forecasts\/(\d+)$/);

@@ -660,7 +660,7 @@ async function openEvent(id) {
       ${e.dua_sisi ? `<div class="detail-block sisi-block"><h3>⚖️ Dua sisi pemberitaan</h3><p>${esc(e.dua_sisi)}</p><p class="muted small" style="margin-top:6px">Bandingkan sendiri lewat sumber media Indonesia dan internasional di bawah.</p></div>` : ''}
       <div class="detail-block"><h3>Kaitan</h3>${d.links.length ? `<ul class="plain">${d.links.map(linkItem).join('')}</ul>` : '<p class="muted">Belum ada kaitan yang disetujui.</p>'}</div>
       ${e.dampak.length ? `<div class="detail-block"><h3>Dampak yang mungkin terjadi</h3><p class="muted small" style="margin-bottom:8px">Hipotesis AI, bukan kepastian.</p>
-        ${e.dampak.map((h, i) => `<div class="hyp"><p>${esc(h.teks)}</p><p class="muted small">Perkiraan dalam ±${h.hari} hari</p>${state.owner ? hypBtn(d.forecasts.some((f) => f.teks === h.teks), `data-hyp="${i}"`) : ''}</div>`).join('')}</div>` : ''}
+        ${e.dampak.map((h, i) => `<div class="hyp"><p>${esc(h.teks)}</p><p class="muted small">Perkiraan dalam ±${h.hari} hari · ${tambahHari(e.tanggal, h.hari) <= state.status.today ? `<b>tanggal cek ${tgl(tambahHari(e.tanggal, h.hari))} sudah lewat</b>` : `dicek ${tgl(tambahHari(e.tanggal, h.hari))}`}</p>${state.owner ? hypBtn(d.forecasts.some((f) => f.teks === h.teks), `data-hyp="${i}"`) : ''}</div>`).join('')}</div>` : ''}
       ${d.forecasts.length ? `<div class="detail-block"><h3>Perkiraan tercatat</h3>${d.forecasts.map((f) => `<div class="hyp"><p>${esc(f.teks)}</p><p class="muted small">Dicek ${tgl(f.tanggal_cek)} · ${statusFc(f)}</p></div>`).join('')}<button type="button" class="btn ghost small-btn" id="to-fc">Buka di Perkiraan</button></div>` : ''}
       <div class="detail-block"><h3>Sumber berita</h3><ul class="plain sources">${d.articles.map((a) => `<li><a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a><br><span class="src">${esc(a.source)} · ${a.origin === 'lokal' ? 'media Indonesia' : 'media internasional'}${a.published_at ? ' · ' + waktu(a.published_at) : ''}</span></li>`).join('')}</ul></div>`;
     $('#see-chain').addEventListener('click', () => { closeDrawer(); go('rantai', { chainId: id, focus: true }); });
@@ -829,22 +829,71 @@ function chainNodes(f, d) {
   return list;
 }
 
-function chainForecastHtml(f, d) {
+// Tanggal cek hipotesis AI dihitung dari tanggal peristiwanya (sama dengan server).
+function tambahHari(day, n) {
+  const d = new Date(day.slice(0, 10) + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + Number(n || 0));
+  return d.toISOString().slice(0, 10);
+}
+function selisihHari(a, b) {
+  return Math.round((Date.parse(b.slice(0, 10)) - Date.parse(a.slice(0, 10))) / 864e5);
+}
+
+// Hipotesis rantai dipisah menjadi: baru (belum dicatat, masih berjalan),
+// sudah lewat tanpa dicatat, dan yang sudah tercatat di Perkiraan.
+function chainForecastGroups(f, d) {
+  const today = d.today || state.status.today;
   const nodes = chainNodes(f, d);
-  const hyps = nodes.flatMap((ev) => (ev.dampak || []).map((h) => ({ ev, h })));
+  const judul = new Map(nodes.map((ev) => [ev.id, ev.judul]));
+  const tercatat = d.tercatat || [];
+  const hyps = nodes.flatMap((ev) => (ev.dampak || []).map((h) => ({ ev, h, cek: tambahHari(ev.tanggal, h.hari) })));
+  const belum = hyps.filter((x) => !tercatat.some((t) => t.event_id === x.ev.id && t.teks === x.h.teks));
+  const byBaru = (a, b) => b.ev.tanggal.localeCompare(a.ev.tanggal) || a.cek.localeCompare(b.cek);
+  return {
+    today,
+    hyps,
+    baru: belum.filter((x) => x.cek > today).sort(byBaru),
+    lewat: belum.filter((x) => x.cek <= today).sort(byBaru),
+    tercatat: tercatat.map((t) => ({ ...t, judul: judul.get(t.event_id) || '' })),
+  };
+}
+
+const TERCATAT_LABEL = { menunggu: 'menunggu dicek', terjadi: 'terjadi', tidak: 'tidak terjadi' };
+
+function chainForecastHtml(f, d) {
+  const g = chainForecastGroups(f, d);
+  const nodes = chainNodes(f, d);
   const options = nodes.map((ev) => `<option value="${ev.id}">${esc(ev.judul)}</option>`).join('');
-  const sudah = (x) => (d.tercatat || []).some((t) => t.event_id === x.ev.id && t.teks === x.h.teks);
+  const idx = (x) => g.hyps.indexOf(x);
+  const hypHtml = (x, lewat) => `<div class="hyp">
+      <p>${esc(x.h.teks)}</p>
+      <p class="muted small">Dari: ${esc(x.ev.judul)} (${tgl(x.ev.tanggal)}) · ±${x.h.hari} hari · ${lewat
+        ? `<b>tanggal cek ${tgl(x.cek)} sudah lewat ${selisihHari(x.cek, g.today)} hari</b>`
+        : `dicek ${tgl(x.cek)}`}</p>
+      ${state.owner ? `<button type="button" class="btn ghost small-btn" data-chyp="${idx(x)}" style="margin-top:6px">${lewat ? 'Catat & minta AI cek' : 'Catat sebagai perkiraan'}</button>` : ''}
+    </div>`;
+  const tHtml = (t) => {
+    const due = t.status === 'menunggu' && (t.tanggal_cek <= g.today || ['terjadi', 'tidak'].includes(t.saran_status));
+    const st = due ? 'perlu keputusan pemilik' : TERCATAT_LABEL[t.status] || t.status;
+    const saran = t.status === 'menunggu' && t.saran_status ? ` · saran AI: ${SARAN_LABEL[t.saran_status].toLowerCase()}` : '';
+    return `<div class="hyp"><p>${esc(t.teks)}</p><p class="muted small">Dari: ${esc(t.judul)} · dicek ${tgl(t.tanggal_cek)} · ${due ? `<b>${st}</b>` : st}${saran}${t.asal === 'riwayat' ? ' · contoh dari riwayat' : ''}</p></div>`;
+  };
+  const grup = (id, nama, meta, isi, open) => `<details class="fc-group" data-grup="${id}"${open ? ' open' : ''}>
+      <summary><span class="g-name">${nama}</span><span class="g-meta">${meta}</span></summary>
+      <div class="g-body">${isi}</div></details>`;
+  const kosong = !g.hyps.length && !g.tercatat.length;
+  const perluKeputusan = g.tercatat.filter((t) => t.status === 'menunggu' && (t.tanggal_cek <= g.today || ['terjadi', 'tidak'].includes(t.saran_status))).length;
   return `
     <section class="section" id="chain-forecast">
       <div class="section-head"><h2>Perkiraan dari rantai ini</h2></div>
-      <p class="lead">Lanjutkan rantainya: apa dampak berikutnya yang Anda perkirakan? Catat sekarang; perkiraan otomatis masuk kelompok sektornya di tab Perkiraan, dicek AI saat tanggal ceknya tiba, lalu Anda yang memutuskan.</p>
-      ${hyps.length
-        ? hyps.map((x, i) => `<div class="hyp">
-            <p>${esc(x.h.teks)}</p>
-            <p class="muted small">Hipotesis AI dari: ${esc(x.ev.judul)}, perkiraan dalam ±${x.h.hari} hari</p>
-            ${state.owner ? hypBtn(sudah(x), `data-chyp="${i}"`) : ''}
-          </div>`).join('')
-        : '<p class="muted">AI belum memberi hipotesis dampak untuk peristiwa di rantai ini.</p>'}
+      <p class="lead">Lanjutkan rantainya: apa dampak berikutnya yang Anda perkirakan? Hipotesis AI dipisah menurut keadaannya agar yang baru tidak tenggelam. Tanggal ceknya dihitung dari tanggal peristiwa.</p>
+      ${kosong ? '<p class="muted">AI belum memberi hipotesis dampak untuk peristiwa di rantai ini.</p>' : `
+        ${grup('baru', 'Baru, belum dicatat', `${g.baru.length} hipotesis · tanggal cek belum tiba`,
+          g.baru.length ? g.baru.map((x) => hypHtml(x, false)).join('') : '<p class="muted small">Tidak ada hipotesis baru.</p>', g.baru.length > 0)}
+        ${g.lewat.length ? grup('lewat', 'Sudah lewat, belum dicatat', `${g.lewat.length} hipotesis${state.owner ? ' · bila dicatat, langsung dicek AI' : ''}`,
+          g.lewat.map((x) => hypHtml(x, true)).join(''), false) : ''}
+        ${g.tercatat.length ? grup('tercatat', 'Sudah tercatat di Perkiraan', `${g.tercatat.length} perkiraan${perluKeputusan ? ` · <span class="g-hot">${perluKeputusan} perlu keputusan</span>` : ''}`,
+          g.tercatat.map(tHtml).join('') + '<button type="button" class="btn ghost small-btn" id="chain-to-fc" style="margin:4px 0 8px">Buka tab Perkiraan</button>', false) : ''}`}
       ${state.owner ? `
         <form id="own-fc" class="hyp" style="margin-top:16px">
           <h3>Tulis perkiraan sendiri</h3>
@@ -852,20 +901,45 @@ function chainForecastHtml(f, d) {
           <select id="fc-from" style="width:100%">${options}</select>
           <label for="fc-text">Perkiraan Anda</label>
           <textarea id="fc-text" rows="3" style="width:100%" placeholder="Contoh: harga BBM nonsubsidi naik dalam sebulan" required></textarea>
-          <label for="fc-days">Dicek dalam</label>
+          <label for="fc-days">Dicek dalam (dihitung dari hari ini)</label>
           <select id="fc-days"><option value="7">7 hari</option><option value="14">14 hari</option><option value="30" selected>30 hari</option><option value="60">60 hari</option><option value="90">90 hari</option></select>
           <div class="row-end" style="justify-content:flex-start"><button type="submit" class="btn primary">Catat perkiraan</button></div>
         </form>` : ''}
     </section>`;
 }
 
+// Setelah mencatat, bagian perkiraan digambar ulang agar hipotesis pindah ke "Sudah tercatat".
+async function refreshChainForecast(f) {
+  const qs = state.withUsulan ? '?usulan=1' : '';
+  const d = await api(`/api/chain/${f.id}${qs}`);
+  const open = [...view.querySelectorAll('#chain-forecast details[open]')].map((x) => x.dataset.grup);
+  const sec = $('#chain-forecast');
+  if (!sec) return;
+  sec.outerHTML = chainForecastHtml(d.focus, d);
+  view.querySelectorAll('#chain-forecast details[data-grup]').forEach((x) => { if (open.includes(x.dataset.grup)) x.open = true; });
+  $('#chain-forecast details[data-grup="tercatat"]')?.setAttribute('open', '');
+  bindChainForecast(d.focus, d);
+}
+
 function bindChainForecast(f, d) {
-  const nodes = chainNodes(f, d);
-  const hyps = nodes.flatMap((ev) => (ev.dampak || []).map((h) => ({ ev, h })));
+  const g = chainForecastGroups(f, d);
   view.querySelectorAll('[data-chyp]').forEach((b) => b.addEventListener('click', async () => {
-    const x = hyps[Number(b.dataset.chyp)];
-    await saveHyp(b, { event_id: x.ev.id, teks: x.h.teks, hari: x.h.hari });
+    const x = g.hyps[Number(b.dataset.chyp)];
+    b.disabled = true;
+    try {
+      const r = await api('/api/forecasts', { method: 'POST', body: JSON.stringify({ event_id: x.ev.id, teks: x.h.teks, hari: x.h.hari }) });
+      toast(r.sudah ? 'Perkiraan ini sudah ada di Perkiraan.'
+        : r.lewat ? 'Dicatat. Tanggal ceknya sudah lewat, jadi AI mengeceknya dalam beberapa menit; keputusan tetap di Anda.'
+          : 'Perkiraan dicatat dan otomatis masuk kelompoknya.');
+      loadStatus();
+      await refreshChainForecast(f);
+    } catch (e) {
+      b.disabled = false;
+      toast(e.message);
+    }
   }));
+  const tf = $('#chain-to-fc');
+  if (tf) tf.addEventListener('click', () => go('perkiraan'));
   const form = $('#own-fc');
   if (form) form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -875,12 +949,12 @@ function bindChainForecast(f, d) {
     btn.disabled = true;
     try {
       const r = await api('/api/forecasts', { method: 'POST', body: JSON.stringify({ event_id: Number($('#fc-from').value), teks, hari: Number($('#fc-days').value) }) });
-      $('#fc-text').value = '';
       toast(r.sudah ? 'Perkiraan ini sudah ada di Perkiraan.' : 'Perkiraan dicatat. Lihat di tab Perkiraan.');
+      await refreshChainForecast(f);
     } catch (err) {
       toast(err.message);
+      btn.disabled = false;
     }
-    btn.disabled = false;
   });
 }
 
@@ -1192,7 +1266,8 @@ function panduanPemilik() {
     <div class="guide-card">
       <h3>Mencatat perkiraan</h3>
       <ul class="steps">
-        <li>Dari ${goto('rantai', 'Rantai')}: buka satu rantai, lalu di bagian "Perkiraan dari rantai ini" klik <b>Catat sebagai perkiraan</b> pada hipotesis AI, atau tulis perkiraan Anda sendiri beserta jangka waktu ceknya.</li>
+        <li>Dari ${goto('rantai', 'Rantai')}: buka satu rantai. Bagian "Perkiraan dari rantai ini" memisahkan hipotesis AI menjadi <b>Baru, belum dicatat</b> (terbuka), <b>Sudah lewat, belum dicatat</b>, dan <b>Sudah tercatat di Perkiraan</b>. Klik <b>Catat sebagai perkiraan</b>, atau tulis perkiraan Anda sendiri beserta jangka waktu ceknya.</li>
+        <li>Tanggal cek hipotesis AI dihitung dari <b>tanggal peristiwanya</b>. Hipotesis yang tanggal ceknya sudah lewat tetap bisa dicatat; AI langsung mengeceknya, lalu Anda yang memutuskan. Perkiraan tulisan sendiri dihitung dari hari dicatat.</li>
         <li>Bisa juga dari panel detail peristiwa (klik judul peristiwa di mana saja).</li>
         <li>Perkiraan <b>otomatis masuk kelompok sektornya</b> berdasarkan isi kalimatnya, misalnya perkiraan tentang rupiah masuk Keuangan & Moneter. Perkiraan yang sama tidak akan tercatat dua kali.</li>
         <li>Perkiraan yang salah ketik bisa dihapus lewat tombol <b>Hapus</b>.</li>
