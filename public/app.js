@@ -120,6 +120,7 @@ async function loadStatus() {
   bfc.hidden = !(state.owner && perlu);
   bfc.textContent = perlu;
   bfc.title = 'Perkiraan yang perlu keputusan Anda';
+  if (typeof videoAfterStatus === 'function') videoAfterStatus(); // fitur percobaan (public/video.js)
 }
 
 $('#owner-btn').addEventListener('click', () => {
@@ -163,7 +164,8 @@ function go(tab, opts = {}) {
   document.querySelectorAll('.tab').forEach((b) => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
   const hash = tab === 'rantai' && state.chainId ? `#rantai/${state.chainId}` : `#${tab}`;
   if (location.hash !== hash) history.replaceState(null, '', hash);
-  const fn = { tinjau: renderTinjau, linimasa: renderLinimasa, rantai: renderRantai, sektor: renderSektor, perkiraan: renderPerkiraan, panduan: renderPanduan }[tab];
+  const fn = { tinjau: renderTinjau, linimasa: renderLinimasa, rantai: renderRantai, sektor: renderSektor, perkiraan: renderPerkiraan, panduan: renderPanduan,
+    video: typeof renderVideo === 'function' ? renderVideo : renderRantai }[tab];
   view.innerHTML = '<p class="loading">Memuat…</p>';
   fn().catch((e) => (view.innerHTML = `<div class="empty"><strong>Tidak bisa memuat bagian ini.</strong>${esc(e.message)}</div>`));
   if (opts.focus) view.focus();
@@ -640,6 +642,7 @@ async function openEvent(id) {
   $('#drawer-close').focus();
   try {
     const d = await api(`/api/events/${id}`);
+    if (typeof videoLoadNotes === 'function') await videoLoadNotes();
     const e = d.event;
     const linkItem = (l) => {
       const keluar = l.dari_id === id;
@@ -647,7 +650,7 @@ async function openEvent(id) {
       const otherJudul = keluar ? l.ke_judul : l.dari_judul;
       return `<li class="hyp"><span class="muted small">${keluar ? 'Berdampak ke' : 'Dipengaruhi oleh'} · ${esc(l.jenis)}${l.status === 'usulan' ? '<span class="usulan-tag">usulan</span>' : ''}</span><br>
         <button type="button" data-open="${otherId}" style="background:none;border:0;padding:0;color:inherit;font:600 1rem var(--body);text-align:left;cursor:pointer;text-decoration:underline">${esc(otherJudul)}</button>
-        <p class="small muted">${esc(l.alasan)}</p></li>`;
+        <p class="small muted">${esc(l.alasan)}</p>${typeof videoNotesHtml === 'function' ? videoNotesHtml(l.id) : ''}</li>`;
     };
     bodyEl.innerHTML = `
       <p>${lvl(e.tingkat)} <span class="muted small">${tgl(e.tanggal, true)}</span></p>
@@ -695,12 +698,14 @@ async function renderRantai() {
   if (!state.chainId) return renderRantaiUtama();
   const qs = state.withUsulan ? '?usulan=1' : '';
   const d = await api(`/api/chain/${state.chainId}${qs}`);
+  if (typeof videoLoadNotes === 'function') await videoLoadNotes();
   const f = d.focus;
   const stop = (n) => n.event ? `<div class="stop ${n.event.tingkat}">
       <div class="stop-card">
         <button type="button" class="linklike" data-chain="${n.event.id}">${esc(n.event.judul)}</button>
         <div class="ev-meta">${lvl(n.event.tingkat)}<span>${tgl(n.event.tanggal)}</span>${duaSisiTag(n.event)}</div>
         <p class="via"><b>${esc(n.link.jenis)}</b>${n.link.status === 'usulan' ? '<span class="usulan-tag">usulan</span>' : ''} · ${esc(n.link.alasan)}</p>
+        ${typeof videoNotesHtml === 'function' ? videoNotesHtml(n.link.id) : ''}
       </div></div>` : '';
   const upLevels = [...d.up].reverse();
   view.innerHTML = `
@@ -733,6 +738,7 @@ async function renderRantai() {
 async function renderRantaiUtama() {
   const kel = state.rantaiKel;
   const d = await api('/api/chains?days=90' + (kel ? '&kelompok=' + encodeURIComponent(kel) : ''));
+  if (typeof videoLoadNotes === 'function') await videoLoadNotes();
   const st = state.status;
   const t = st.tinjau;
   const banner = state.owner && t
@@ -791,7 +797,7 @@ function chainCardHtml(c) {
       ${lebih > 0 ? `<li class="more">… ${lebih} langkah lagi</li>` : ''}
     </ol>
     <div class="ev-meta"><span>${c.n_peristiwa} peristiwa · ${c.n_kaitan} kaitan</span><span>terbaru ${tgl(c.terbaru)}</span>${lain > 0 ? `<span>${lain} cabang lain</span>` : ''}</div>
-    <div class="chips">${c.kelompok.map((k) => `<span class="chip kel">${esc(kelNama(k))}</span>`).join('')}${c.dua_sisi ? '<span class="chip sisi">⚖️ Sudut berbeda</span>' : ''}</div>
+    <div class="chips">${c.kelompok.map((k) => `<span class="chip kel">${esc(kelNama(k))}</span>`).join('')}${c.dua_sisi ? '<span class="chip sisi">⚖️ Sudut berbeda</span>' : ''}${typeof videoChainChip === 'function' ? videoChainChip(c) : ''}</div>
   </button>`;
 }
 
@@ -876,7 +882,7 @@ function chainForecastHtml(f, d) {
     const due = t.status === 'menunggu' && (t.tanggal_cek <= g.today || ['terjadi', 'tidak'].includes(t.saran_status));
     const st = due ? 'perlu keputusan pemilik' : TERCATAT_LABEL[t.status] || t.status;
     const saran = t.status === 'menunggu' && t.saran_status ? ` · saran AI: ${SARAN_LABEL[t.saran_status].toLowerCase()}` : '';
-    return `<div class="hyp"><p>${esc(t.teks)}</p><p class="muted small">Dari: ${esc(t.judul)} · dicek ${tgl(t.tanggal_cek)} · ${due ? `<b>${st}</b>` : st}${saran}${t.asal === 'riwayat' ? ' · contoh dari riwayat' : ''}</p></div>`;
+    return `<div class="hyp"><p>${esc(t.teks)}</p><p class="muted small">Dari: ${esc(t.judul)} · dicek ${tgl(t.tanggal_cek)} · ${due ? `<b>${st}</b>` : st}${saran}${t.asal === 'riwayat' ? ' · contoh dari riwayat' : t.asal === 'video' ? ' · ▶ dari pandangan video' : ''}</p></div>`;
   };
   const grup = (id, nama, meta, isi, open) => `<details class="fc-group" data-grup="${id}"${open ? ' open' : ''}>
       <summary><span class="g-name">${nama}</span><span class="g-meta">${meta}</span></summary>
@@ -1076,6 +1082,7 @@ function fcItemHtml(f) {
     <div class="fc-top"><span class="fc-badge ${st}">${FC_LABEL[st]}</span><span class="muted small">dicek ${tgl(f.tanggal_cek)}</span></div>
     <p class="fc-text">${esc(f.teks)}</p>
     <p class="muted small" style="margin-top:4px">Dari: <button type="button" class="linklike plainbtn" data-open="${f.event_id}">${esc(f.event_judul)}</button>${f.event_tanggal ? ` (${tgl(f.event_tanggal)})` : ''}</p>
+    ${typeof videoSumberFcHtml === 'function' ? videoSumberFcHtml(f) : ''}
     ${saranHtml(f)}
     ${keputusanHtml(f)}
     ${state.owner ? fcActionsHtml(f) : ''}
@@ -1170,7 +1177,7 @@ function renderPanduan() {
       <h2>Panduan</h2>
       <p class="lead" style="margin-top:8px">Aplikasi ini adalah <b>peta sebab-akibat</b>: ia menunjukkan bagaimana satu kejadian, misalnya konflik di jalur kapal minyak, merambat menjadi kejadian lain sampai ke Indonesia, misalnya harga BBM atau nilai rupiah. Ini alat bantu berpikir, <b>bukan saran beli atau jual</b>.</p>
       <div class="seg" role="group" aria-label="Pilih panduan">${tab('pengunjung', 'Untuk pengunjung (tanpa PIN)')}${tab('pemilik', 'Untuk pemilik (dengan PIN)')}</div>
-      <div class="guide-body">${mode === 'pemilik' ? panduanPemilik() : panduanPengunjung(src, st.sejak)}</div>
+      <div class="guide-body">${mode === 'pemilik' ? panduanPemilik() : panduanPengunjung(src, st.sejak)}${typeof videoPanduanHtml === 'function' ? videoPanduanHtml(mode) : ''}</div>
     </section>`;
   view.querySelectorAll('[data-guide]').forEach((b) => b.addEventListener('click', () => { state.guideMode = b.dataset.guide; renderPanduan(); }));
   view.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => go(b.dataset.goto)));
@@ -1317,6 +1324,6 @@ function st_ai() {
   const h = location.hash.replace('#', '');
   const [tab, id] = h.split('/');
   if (tab === 'rantai' && id) state.chainId = Number(id);
-  const valid = ['tinjau', 'linimasa', 'rantai', 'sektor', 'perkiraan', 'panduan'];
+  const valid = ['tinjau', 'linimasa', 'rantai', 'sektor', 'perkiraan', 'panduan', ...(typeof renderVideo === 'function' ? ['video'] : [])];
   go(valid.includes(tab) ? tab : 'rantai');
 })();

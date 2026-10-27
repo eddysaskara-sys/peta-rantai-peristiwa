@@ -17,6 +17,8 @@ import { json, parseList, safeEqual, wibDate, wibDateDaysAgo, addDays, nowIso, k
 import { computeSignals, RIWAYAT_HARGA } from './market.js';
 import { reviewQueue, decidedToday, poolCount, historyQueue, riwayatCount } from './priority.js';
 import { forecastOut, ringkasan, KELOMPOK_PERKIRAAN } from './forecast.js';
+// Fitur percobaan Pandangan Video (branch fitur/pandangan-video). Semua kodenya ada di src/video.js.
+import { videoApi, videoTick, tempelSumberVideo, VIDEO_CRON } from './video.js';
 
 // Pembaruan biasa (bukan isi riwayat dan bukan cek sumber), untuk info "Diperbarui ...".
 const RUN_BIASA = "trigger IN ('jadwal','manual')";
@@ -54,6 +56,7 @@ export default {
   // - tiap 5 menit: jalankan permintaan "Ambil berita sekarang" yang sedang antre
   async scheduled(event, env, ctx) {
     if (event.cron === DAILY_CRON) ctx.waitUntil(runHarian(env));
+    else if (event.cron === VIDEO_CRON) ctx.waitUntil(videoTick(env)); // jadwal sendiri: tidak berbagi batas permintaan dengan antrean berita
     else ctx.waitUntil(processQueue(env));
   },
 };
@@ -101,7 +104,7 @@ function eventOut(r) {
   };
 }
 
-async function route(request, env) {
+async function route(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
@@ -109,6 +112,12 @@ async function route(request, env) {
   const owner = isOwner(request, env);
 
   if (!path.startsWith('/api/')) return env.ASSETS.fetch(request);
+
+  // Pandangan Video (fitur percobaan): semua rute /api/video* ditangani src/video.js.
+  if (path.startsWith('/api/video')) {
+    const res = await videoApi(request, env, ctx, { owner, requireOwner });
+    if (res) return res;
+  }
 
   // ---------- Status ----------
   if (path === '/api/status' && method === 'GET') {
@@ -453,6 +462,7 @@ async function route(request, env) {
     const today = wibDate();
     const rows = await db.prepare(`${FC_SQL} ORDER BY f.tanggal_cek, f.id`).all();
     const forecasts = rows.results.map((r) => forecastOut(r, today));
+    await tempelSumberVideo(db, forecasts);
     return json({ today, forecasts, kelompok: KELOMPOK_PERKIRAAN, ringkasan: ringkasan(forecasts) });
   }
 
@@ -577,7 +587,7 @@ export function buildChains(links, evMap) {
     const evs = nodes.map((n) => evMap.get(n)).filter(Boolean);
     if (!evs.length) continue;
     const jalur = [{ event: evMap.get(akar), link: null }].concat(
-      path.map((p) => ({ event: evMap.get(p.ke), link: { jenis: p.link.jenis, alasan: p.link.alasan } }))
+      path.map((p) => ({ event: evMap.get(p.ke), link: { id: p.link.id, jenis: p.link.jenis, alasan: p.link.alasan } }))
     );
     out.push({
       akar,

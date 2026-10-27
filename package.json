@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
-    "test": "node test/harness.mjs"
+    "test": "node test/harness.mjs && node test/video.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.151.3"

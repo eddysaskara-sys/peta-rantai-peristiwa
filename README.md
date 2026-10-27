@@ -58,6 +58,33 @@ Spesifikasi lengkap ada di `BRIEF.md`. Ringkasnya:
   Usulan riwayat ditinjau lewat daftar centang **Setujui sekaligus** (yang keyakinan AI ≥ 60% sudah tercentang);
   kaitan yang disetujui langsung masuk Rantai.
 
+## Fitur percobaan: Pandangan Video (branch `fitur/pandangan-video`, 27 Okt 2026)
+
+Video opini YouTube (awalnya channel **Bennix**, `@bennix`) diringkas **Gemini API** dan ditempel ke rantai
+sebagai **catatan ▶**, bukan sebagai peristiwa:
+
+- **Mendukung / membantah kaitan** yang sudah disetujui: tampil sebagai catatan ▶ di Rantai dan panel detail,
+  dengan tautan ke menit videonya. Rantai tidak berubah dan tidak ada usulan baru di Tinjau.
+- **Perkiraan pembicara**: tidak dicatat otomatis. Pemilik menekan **Catat ke Perkiraan** di tab Video
+  (asal `video`, tanggal cek dihitung dari tanggal video), lalu dicek semi-otomatis seperti perkiraan lain.
+- **Ide kaitan baru** dan **pandangan lain** hanya tampil di tab Video.
+- Rekomendasi beli/jual saham tertentu tidak dicatat. Pemilik bisa menghapus klaim yang salah tangkap.
+
+Cara kerja: feed RSS channel dicek tiap 3 jam (jadwal sendiri `7,22,37,52 * * * *`, terpisah dari antrean berita);
+video ≤ 14 hari diringkas maks. 4 per hari, hanya 30 menit pertama, resolusi rendah. Gemini dipakai terpisah dari
+Workers AI, jadi tidak memakai kuota 40 panggilan. Model dipilih otomatis (Flash stabil terbaru dari daftar model akun);
+bisa dipaksa dengan variabel `GEMINI_MODEL`.
+
+**Mengaktifkan:** buat API key gratis di Google AI Studio, lalu di Cloudflare tambahkan secret `GEMINI_API_KEY`
+(Settings → Variables and Secrets → Add → Type: Secret). Tanpa secret ini fitur diam total. Tabel `videos`,
+`video_klaim`, dan `video_state` dibuat otomatis saat pertama dipakai (lihat `migrations/0004_video.sql`).
+Channel diatur di `VIDEO_CHANNELS` (`src/video.js`); bila halaman @handle tidak terbaca dari Cloudflare, isi `channel_id`.
+
+**Membatalkan:** cukup jangan gabungkan branch ini (atau revert merge-nya). Seluruh kode ada di `src/video.js`,
+`public/video.js`, `public/video.css`, dan `test/video.mjs`; sisanya hanya kait kecil bertanda "Pandangan Video"
+di `src/index.js`, `public/app.js`, `public/index.html`, dan satu jadwal di `wrangler.toml`. Data video boleh
+dibiarkan atau dihapus dengan perintah DROP di akhir `migrations/0004_video.sql`.
+
 ## Alamat aplikasi
 
 `https://peta-rantai-peristiwa.eddysaskara.workers.dev`

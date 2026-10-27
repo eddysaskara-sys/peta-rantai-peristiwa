@@ -20,8 +20,11 @@ database_id = "4957dd25-676b-49cb-b4e8-21db098472f0"
 # "30 10 * * *": pembaruan otomatis setiap hari pukul 17.30 WIB (10.30 UTC),
 #                supaya hasilnya siap ditinjau malam hari.
 # "*/5 * * * *": memproses permintaan "Ambil berita sekarang" yang sedang antre.
+# "7,22,37,52 * * * *": Pandangan Video (fitur percobaan) — periksa channel YouTube dan ringkas satu video
+#                       dengan Gemini. Jadwal terpisah supaya tidak berbagi batas 50 permintaan dengan antrean berita.
+#                       Tidak melakukan apa pun sampai secret GEMINI_API_KEY diisi.
 [triggers]
-crons = ["30 10 * * *", "*/5 * * * *"]
+crons = ["30 10 * * *", "*/5 * * * *", "7,22,37,52 * * * *"]
 
 [observability]
 enabled = true

@@ -1,0 +1,40 @@
+/* Pandangan Video (fitur percobaan). Aman dihapus bersama public/video.js. */
+.chip.vid { color: var(--text); border-color: var(--lokal); }
+
+.vnotes { margin-top: 8px; font-size: 0.88rem; }
+.vnotes > summary { cursor: pointer; color: var(--lokal); font-weight: 600; }
+.vnotes ul { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.vnote { border-left: 3px solid var(--lokal); padding: 2px 0 2px 10px; }
+.vnote.bantah { border-left-color: var(--no); }
+.vnote-head { display: block; color: var(--muted); }
+.vnote-teks { display: block; }
+.vmenit { white-space: nowrap; }
+
+.vbox ul.vchannels { margin: 6px 0; padding-left: 18px; }
+.bad { color: var(--no); }
+
+.vlist { display: grid; gap: 14px; }
+.vcard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 16px; min-width: 0; }
+.vcard.st-dilewati, .vcard.st-tidak_relevan { opacity: 0.8; }
+.vcard h3 { margin: 6px 0 8px; font-size: 1.05rem; overflow-wrap: anywhere; }
+.vcard h3 a { text-decoration-color: var(--line); text-underline-offset: 3px; }
+.vtop { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.vstatus { font: 700 0.75rem var(--body); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.vstatus.selesai { color: var(--lokal); border-color: var(--lokal); }
+.vstatus.baru { color: var(--global); border-color: var(--global); }
+.vstatus.gagal { color: var(--no); border-color: var(--no); }
+.vringkas { margin-bottom: 10px; }
+.vgrup { margin-top: 10px; }
+.vgrup h4 { font: 700 0.85rem var(--body); color: var(--muted); margin: 0 0 6px; }
+.vgrup ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.vklaim { border-left: 3px solid var(--line); padding: 2px 0 2px 10px; }
+.vklaim.dukung { border-left-color: var(--lokal); }
+.vklaim.bantah { border-left-color: var(--no); }
+.vklaim.perkiraan { border-left-color: var(--global); }
+.vklaim.ide { border-left-style: dashed; }
+.vkonteks { margin-top: 4px; }
+.vkonteks button { text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.vaksi { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.vaksi .danger { color: var(--no); font-size: 0.8rem; opacity: 0.85; }
+.vaksi .danger:hover { opacity: 1; }
+.vfoot { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
